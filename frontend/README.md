@@ -32,24 +32,24 @@ VITE_API_BASE_URL=http://localhost:8000
 npm run dev
 ```
 
-- App: http://localhost:5173  
-- Admin login: http://localhost:5173/login  
-- Volunteer flows use magic-link URLs from the backend.
+- App: http://localhost:5173
+- Admin login: http://localhost:5173/login
+- Volunteer flows use shareable event links (admin copies URL from the event control room).
 
 ## Scripts
 
-| Command       | Description                    |
-|---------------|--------------------------------|
-| `npm run dev` | Start Vite dev server (HMR)    |
-| `npm run build` | TypeScript check + production build |
-| `npm run preview` | Preview production build locally |
-| `npm run lint` | Run ESLint                     |
+| Command           | Description                         |
+| ----------------- | ----------------------------------- |
+| `npm run dev`     | Start Vite dev server (HMR)         |
+| `npm run build`   | TypeScript check + production build |
+| `npm run preview` | Preview production build locally    |
+| `npm run lint`    | Run ESLint                          |
 
 ## Environment variables
 
-| Variable             | Description              | Default              |
-|----------------------|--------------------------|----------------------|
-| VITE_API_BASE_URL    | Backend API base URL     | http://localhost:8000 |
+| Variable          | Description          | Default               |
+| ----------------- | -------------------- | --------------------- |
+| VITE_API_BASE_URL | Backend API base URL | http://localhost:8000 |
 
 Variables must be prefixed with `VITE_` to be exposed to the client.
 

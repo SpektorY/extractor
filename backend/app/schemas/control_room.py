@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -20,7 +20,6 @@ class EventVolunteerRow(BaseModel):
     id: int
     volunteer_id: int
     volunteer_name: str
-    status: str
     magic_token: str
 
 
@@ -29,6 +28,7 @@ class EventLogRow(BaseModel):
     id: int
     message: str
     author_type: str
+    author_name: Optional[str] = None
     created_at: Optional[datetime] = None
 
 

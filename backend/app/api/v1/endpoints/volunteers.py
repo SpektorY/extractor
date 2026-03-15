@@ -3,9 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models import Volunteer, VolunteerStatus, User
+from app.models import Volunteer
 from app.schemas.volunteer import VolunteerCreate, VolunteerUpdate, VolunteerResponse
-from app.api.v1.endpoints.auth import get_current_user
+from app.api.v1.endpoints.auth import get_current_user, AdminAuth
 
 router = APIRouter()
 
@@ -15,7 +15,7 @@ def list_volunteers(
     group_tag: Optional[str] = None,
     include_deleted: bool = False,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: AdminAuth = Depends(get_current_user),
 ) -> List[VolunteerResponse]:
     q = db.query(Volunteer)
     if not include_deleted:
@@ -30,7 +30,7 @@ def list_volunteers(
 def create_volunteer(
     body: VolunteerCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: AdminAuth = Depends(get_current_user),
 ) -> VolunteerResponse:
     existing = db.query(Volunteer).filter(
         Volunteer.phone == body.phone,
@@ -47,7 +47,6 @@ def create_volunteer(
         phone=body.phone,
         group_tag=body.group_tag,
         living_area=body.living_area,
-        status=VolunteerStatus.APPROVED,  # admin-added = approved
     )
     db.add(volunteer)
     db.commit()
@@ -59,7 +58,7 @@ def create_volunteer(
 def get_volunteer(
     volunteer_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: AdminAuth = Depends(get_current_user),
 ) -> VolunteerResponse:
     v = db.query(Volunteer).filter(Volunteer.id == volunteer_id).first()
     if not v:
@@ -72,7 +71,7 @@ def update_volunteer(
     volunteer_id: int,
     body: VolunteerUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: AdminAuth = Depends(get_current_user),
 ) -> VolunteerResponse:
     v = db.query(Volunteer).filter(Volunteer.id == volunteer_id).first()
     if not v:
@@ -101,7 +100,7 @@ def update_volunteer(
 def delete_volunteer(
     volunteer_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: AdminAuth = Depends(get_current_user),
 ) -> None:
     from datetime import datetime, timezone
     v = db.query(Volunteer).filter(Volunteer.id == volunteer_id).first()
@@ -116,14 +115,13 @@ def delete_volunteer(
 def approve_volunteer(
     volunteer_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: AdminAuth = Depends(get_current_user),
 ) -> VolunteerResponse:
     v = db.query(Volunteer).filter(Volunteer.id == volunteer_id).first()
     if not v:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="מתנדב לא נמצא")
     if v.anonymized:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="מתנדב זה עבר אנונימיזציה")
-    v.status = VolunteerStatus.APPROVED
     db.commit()
     db.refresh(v)
     return VolunteerResponse.model_validate(v)
@@ -133,14 +131,15 @@ def approve_volunteer(
 def anonymize_volunteer(
     volunteer_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: AdminAuth = Depends(get_current_user),
 ) -> None:
     v = db.query(Volunteer).filter(Volunteer.id == volunteer_id).first()
     if not v:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="מתנדב לא נמצא")
     v.first_name = "אנונימי"
     v.last_name = ""
-    v.phone = ""
+    # Unique placeholder so we don't violate volunteers.phone unique constraint
+    v.phone = f"anon-{v.id}"
     v.group_tag = None
     v.living_area = None
     v.anonymized = True

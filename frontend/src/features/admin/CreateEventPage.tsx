@@ -20,7 +20,7 @@ export function CreateEventPage() {
       }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["events"] })
-      navigate(`/admin/events/${data.id}`, { replace: true })
+      navigate(`/admin/events/${data.id}`, { replace: true, state: { openShareModal: true } })
     },
   })
 

@@ -1,4 +1,4 @@
-"""Public endpoints for volunteers using magic link token (no admin JWT)."""
+"""Public endpoints for volunteers using event token in URL (no admin JWT)."""
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,9 +6,8 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models import Event, EventVolunteer, Resident, EventLog
+from app.models import Event, EventLog, EventVolunteer, Resident, Volunteer
 from app.models.resident import ResidentStatus, ResidentSource
-from app.models.event_volunteer import VolunteerEventStatus
 from app.models.event_log import EventLogAuthorType
 from app.services.event_broadcast import broadcast_event_updated_sync
 
@@ -20,7 +19,6 @@ class EventByTokenResponse(BaseModel):
     event_name: str
     event_address: str
     event_description: Optional[str] = None
-    volunteer_status: str  # e.g. coming, arrived, pending
 
 
 def get_event_volunteer_by_token(
@@ -57,26 +55,7 @@ def get_event_by_token(
         event_name=event.name,
         event_address=event.address,
         event_description=event.description or None,
-        volunteer_status=ev.status.value,
     )
-
-
-class RespondRequest(BaseModel):
-    coming: bool
-
-
-@router.post("/event-by-token/{token}/respond")
-def respond_to_event(
-    token: str,
-    body: RespondRequest,
-    db: Session = Depends(get_db),
-) -> dict:
-    ev = get_event_volunteer_by_token(token, db)
-    ev.status = (
-        VolunteerEventStatus.COMING if body.coming else VolunteerEventStatus.NOT_COMING
-    )
-    db.commit()
-    return {"status": ev.status.value}
 
 
 class ResidentRow(BaseModel):
@@ -107,14 +86,6 @@ def get_residents_by_token(
         )
         for r in rows
     ]
-
-
-@router.post("/event-by-token/{token}/arrived")
-def mark_arrived(token: str, db: Session = Depends(get_db)) -> dict:
-    ev = get_event_volunteer_by_token(token, db)
-    ev.status = VolunteerEventStatus.ARRIVED
-    db.commit()
-    return {"status": ev.status.value}
 
 
 class ResidentUpdateRequest(BaseModel):
@@ -210,6 +181,7 @@ class LogEntry(BaseModel):
     id: int
     message: str
     author_type: str
+    author_name: Optional[str] = None  # volunteer name or "מנהל" for admin
     created_at: Optional[str] = None
 
 
@@ -222,15 +194,32 @@ def get_event_log(token: str, db: Session = Depends(get_db)) -> List[LogEntry]:
         .order_by(EventLog.created_at.asc())
         .all()
     )
-    return [
-        LogEntry(
-            id=r.id,
-            message=r.message,
-            author_type=r.author_type.value,
-            created_at=r.created_at.isoformat() if r.created_at else None,
+    volunteer_ids = [r.author_volunteer_id for r in rows if r.author_volunteer_id]
+    volunteers = (
+        db.query(Volunteer).filter(Volunteer.id.in_(volunteer_ids)).all()
+        if volunteer_ids
+        else []
+    )
+    vol_names = {
+        v.id: f"{v.first_name} {v.last_name}".strip() or v.first_name
+        for v in volunteers
+    }
+    result = []
+    for r in rows:
+        if r.author_volunteer_id:
+            author_name = vol_names.get(r.author_volunteer_id) or "מתנדב"
+        else:
+            author_name = "מנהל"
+        result.append(
+            LogEntry(
+                id=r.id,
+                message=r.message,
+                author_type=r.author_type.value,
+                author_name=author_name,
+                created_at=r.created_at.isoformat() if r.created_at else None,
+            )
         )
-        for r in rows
-    ]
+    return result
 
 
 class LogCreate(BaseModel):
@@ -258,9 +247,16 @@ def add_event_log(
     db.commit()
     db.refresh(log)
     broadcast_event_updated_sync(ev.event_id)
+    volunteer = db.query(Volunteer).filter(Volunteer.id == ev.volunteer_id).first()
+    author_name = (
+        f"{volunteer.first_name} {volunteer.last_name}".strip() or volunteer.first_name
+        if volunteer
+        else "מתנדב"
+    )
     return LogEntry(
         id=log.id,
         message=log.message,
         author_type=log.author_type.value,
+        author_name=author_name,
         created_at=log.created_at.isoformat() if log.created_at else None,
     )

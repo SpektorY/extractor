@@ -3,17 +3,17 @@ from typing import Optional
 from app.core.config import settings
 
 
-def send_volunteer_invite(phone: str, event_name: str, event_address: str, magic_link: str) -> bool:
-    """Send WhatsApp message to volunteer with event details and magic link. Returns True if sent (or mocked)."""
+def send_volunteer_invite(phone: str, event_name: str, event_address: str, event_link: str) -> bool:
+    """Send WhatsApp message to volunteer with event details and event link. Returns True if sent (or mocked)."""
     message = (
         f"אירוע חדש: {event_name}\n"
         f"כתובת: {event_address}\n"
-        f"האם באפשרותך לסייע? לחץ על הקישור לפתיחת משימה:\n{magic_link}"
+        f"האם באפשרותך לסייע? לחץ על הקישור לפתיחת משימה:\n{event_link}"
     )
     provider = settings.whatsapp_provider
     if not provider:
         if settings.debug:
-            print(f"[DEV] WhatsApp (no provider): to={phone} link={magic_link}")
+            print(f"[DEV] WhatsApp (no provider): to={phone} link={event_link}")
         return True
     if provider == "twilio":
         return _send_twilio(phone, message)

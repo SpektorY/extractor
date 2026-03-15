@@ -5,14 +5,13 @@ import { AdminLayout } from "@/features/admin/AdminLayout"
 import { VolunteerLayout } from "@/features/volunteer/VolunteerLayout"
 import { ProtectedRoute } from "@/components/ProtectedRoute"
 import { LandingPage } from "@/features/public/LandingPage"
+import { JoinEventPage } from "@/features/public/JoinEventPage"
 import { LoginPage } from "@/features/admin/LoginPage"
-import { ForgotPasswordPage } from "@/features/admin/ForgotPasswordPage"
-import { ResetPasswordPage } from "@/features/admin/ResetPasswordPage"
 import { AdminDashboard } from "@/features/admin/AdminDashboard"
 import { VolunteersPage } from "@/features/admin/VolunteersPage"
 import { CreateEventPage } from "@/features/admin/CreateEventPage"
 import { ControlRoomPage } from "@/features/admin/ControlRoomPage"
-import { EventGatePage } from "@/features/volunteer/EventGatePage"
+import { RedirectToEventDashboard } from "@/features/volunteer/RedirectToEventDashboard"
 import { VolunteerEventDashboard } from "@/features/volunteer/VolunteerEventDashboard"
 import { ResidentUpdatePage } from "@/features/volunteer/ResidentUpdatePage"
 import { AddCasualPage } from "@/features/volunteer/AddCasualPage"
@@ -25,11 +24,10 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="/event/join/:eventId" element={<JoinEventPage />} />
           <Route path="/" element={<PublicLayout />}>
             <Route index element={<LandingPage />} />
             <Route path="login" element={<LoginPage />} />
-            <Route path="forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="reset-password" element={<ResetPasswordPage />} />
           </Route>
           <Route
             path="/admin"
@@ -45,7 +43,7 @@ function App() {
             <Route path="events/:eventId" element={<ControlRoomPage />} />
           </Route>
           <Route path="/event/:token" element={<VolunteerLayout />}>
-            <Route index element={<EventGatePage />} />
+            <Route index element={<RedirectToEventDashboard />} />
             <Route path="dashboard" element={<VolunteerEventDashboard />} />
             <Route path="resident/:residentId" element={<ResidentUpdatePage />} />
             <Route path="casual" element={<AddCasualPage />} />

@@ -22,7 +22,6 @@ interface VolunteerItem {
   phone: string
   group_tag: string | null
   living_area: string | null
-  status: string
   anonymized: boolean
   deleted_at: string | null
 }
@@ -107,11 +106,6 @@ export function VolunteersPage() {
       group_tag: v.group_tag ?? "",
       living_area: v.living_area ?? "",
     })
-  }
-
-  async function handleApprove(id: number) {
-    await apiRequest(`/api/v1/volunteers/${id}/approve`, { method: "POST" })
-    queryClient.invalidateQueries({ queryKey: ["volunteers"] })
   }
 
   function openConfirmDelete(v: VolunteerItem) {
@@ -283,7 +277,6 @@ export function VolunteersPage() {
                   <TableHead>טלפון</TableHead>
                   <TableHead>אזור</TableHead>
                   <TableHead>קבוצה</TableHead>
-                  <TableHead>סטטוס</TableHead>
                   <TableHead>פעולות</TableHead>
                 </TableRow>
               </TableHeader>
@@ -298,29 +291,12 @@ export function VolunteersPage() {
                     <TableCell>{v.living_area ?? "—"}</TableCell>
                     <TableCell>{v.group_tag ?? "—"}</TableCell>
                     <TableCell>
-                      {v.anonymized ? (
-                        <span className="text-muted-foreground">הוסר (אנונימי)</span>
-                      ) : v.deleted_at ? (
-                        <span className="text-muted-foreground">הוסר</span>
-                      ) : v.status === "PENDING" ? (
-                        <span className="text-amber-600">ממתין לאישור</span>
-                      ) : (
-                        <span className="text-muted-foreground">מאושר</span>
-                      )}
+                      {v.anonymized && <span className="text-muted-foreground">הוסר (אנונימי)</span>}
+                      {v.deleted_at && <span className="text-muted-foreground">הוסר</span>}
                     </TableCell>
                     <TableCell>
                       {!v.anonymized && (
                         <>
-                          {!v.deleted_at && v.status === "PENDING" && (
-                            <Button
-                              variant="default"
-                              size="sm"
-                              className="ml-2"
-                              onClick={() => handleApprove(v.id)}
-                            >
-                              אשר
-                            </Button>
-                          )}
                           {!v.deleted_at && (
                             <>
                               <Button

@@ -16,5 +16,4 @@ class EventLog(Base, TimestampMixin):
     event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
     message = Column(Text, nullable=False)
     author_type = Column(SQLEnum(EventLogAuthorType), nullable=False)
-    author_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)   # if admin
     author_volunteer_id = Column(Integer, ForeignKey("volunteers.id", ondelete="SET NULL"), nullable=True)  # if volunteer

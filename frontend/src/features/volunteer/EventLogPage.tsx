@@ -11,6 +11,7 @@ interface LogEntry {
   id: number
   message: string
   author_type: string
+  author_name?: string | null
   created_at: string | null
 }
 
@@ -54,14 +55,21 @@ export function EventLogPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-2 max-h-80 overflow-auto border rounded p-2 mb-4">
-            {logEntries?.map((e) => (
-              <div key={e.id} className="text-sm">
-                <span className="text-muted-foreground">
-                  {e.created_at ? new Date(e.created_at).toLocaleString("he-IL") : ""} [{e.author_type}]
-                </span>{" "}
-                {e.message}
-              </div>
-            ))}
+            {!logEntries?.length ? (
+              <p className="text-center text-muted-foreground py-8">
+                אין הודעות ביומן עדיין. שלח הודעה ראשונה.
+              </p>
+            ) : (
+              logEntries.map((e) => (
+                <div key={e.id} className="text-sm">
+                  <span className="text-muted-foreground">
+                    {e.created_at ? new Date(e.created_at).toLocaleString("he-IL") : ""}{" "}
+                    {e.author_name ? `(${e.author_name})` : `[${e.author_type}]`}
+                  </span>{" "}
+                  {e.message}
+                </div>
+              ))
+            )}
           </div>
           <div className="flex gap-2">
             <Input

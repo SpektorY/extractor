@@ -9,11 +9,9 @@ class VolunteerBase(BaseModel):
     phone: str
     group_tag: Optional[str] = None
     living_area: Optional[str] = None
-    status: Optional[str] = None  # "PENDING" | "APPROVED"
 
 
 class VolunteerCreate(VolunteerBase):
-    """Admin create: status is set to APPROVED automatically."""
     pass
 
 
@@ -23,7 +21,6 @@ class VolunteerUpdate(BaseModel):
     phone: Optional[str] = None
     group_tag: Optional[str] = None
     living_area: Optional[str] = None
-    status: Optional[str] = None
 
 
 class VolunteerResponse(VolunteerBase):
@@ -31,4 +28,6 @@ class VolunteerResponse(VolunteerBase):
     id: int
     anonymized: bool = False
     created_at: Optional[datetime] = None
-    deleted_at: Optional[datetime] = None  # set when soft-deleted; list can include_deleted to still show for anonymize
+    deleted_at: Optional[datetime] = (
+        None  # set when soft-deleted; list can include_deleted to still show for anonymize
+    )

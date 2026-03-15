@@ -7,11 +7,11 @@ export interface LoginResponse {
   token_type: string
 }
 
-export async function login(email: string, password: string): Promise<LoginResponse> {
+export async function login(password: string): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ password }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))

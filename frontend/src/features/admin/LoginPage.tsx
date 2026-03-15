@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useNavigate, Link } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -10,7 +10,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { login, setAccessToken } from "@/lib/api"
 
 const schema = z.object({
-  email: z.string().min(1, "נא להזין אימייל").email("אימייל לא תקין"),
   password: z.string().min(1, "נא להזין סיסמה"),
 })
 
@@ -30,7 +29,7 @@ export function LoginPage() {
   async function onSubmit(data: FormData) {
     setError(null)
     try {
-      const res = await login(data.email, data.password)
+      const res = await login(data.password)
       setAccessToken(res.access_token)
       navigate("/admin", { replace: true })
     } catch (e) {
@@ -47,18 +46,6 @@ export function LoginPage() {
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="email">אימייל</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                {...register("email")}
-              />
-              {errors.email && (
-                <p className="text-sm text-destructive">{errors.email.message}</p>
-              )}
-            </div>
-            <div className="grid gap-2">
               <Label htmlFor="password">סיסמה</Label>
               <Input
                 id="password"
@@ -74,9 +61,6 @@ export function LoginPage() {
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? "מתחבר..." : "התחבר"}
             </Button>
-            <p className="text-center text-sm">
-              <Link to="/forgot-password" className="underline">שכחתי סיסמה</Link>
-            </p>
           </form>
         </CardContent>
       </Card>

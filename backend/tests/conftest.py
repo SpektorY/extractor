@@ -7,17 +7,10 @@ from sqlalchemy.pool import StaticPool
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("ADMIN_PASSWORD", "test-admin-pass")
 
 from app.main import app
 from app.core.database import Base, get_db
-
-
-@pytest.fixture(autouse=True)
-def mock_email_sender(monkeypatch):
-    """Mock email sending so tests never send real email."""
-    def noop_send(*args, **kwargs):
-        return True
-    monkeypatch.setattr("app.api.v1.endpoints.auth.send_password_reset_email", noop_send)
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 engine = create_engine(

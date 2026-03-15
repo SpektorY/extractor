@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production-use-openssl-rand-hex-32"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
-    magic_link_expire_minutes: int = 60 * 24  # 24 hours for volunteer link
+    # Single admin: password from env (no user table)
+    admin_password: str = ""
 
     # CORS: in .env use comma-separated string, e.g. CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
     cors_origins_str: str = Field(
@@ -51,23 +52,6 @@ class Settings(BaseSettings):
     greenapi_instance_id: Optional[str] = None
     greenapi_token: Optional[str] = None
 
-    # Frontend base URL (for magic links)
-    frontend_base_url: str = "http://localhost:5173"
-
-    # Email (password reset, etc.): "smtp" | "resend" | leave unset for stub (no email sent)
-    email_backend: Optional[str] = None  # "smtp" | "resend"
-    email_from: Optional[str] = None  # e.g. noreply@yourdomain.com
-    email_from_name: str = "המחלץ"
-
-    # SMTP (when email_backend=smtp)
-    smtp_host: Optional[str] = None
-    smtp_port: int = 587
-    smtp_user: Optional[str] = None
-    smtp_password: Optional[str] = None
-    smtp_use_tls: bool = True
-
-    # Resend (when email_backend=resend)
-    resend_api_key: Optional[str] = None
 
 
 settings = Settings()

@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom"
+import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { apiRequest } from "@/lib/api"
+import { ShareLinkModal } from "./ShareLinkModal"
 
 const RESIDENTS_FILE_FORMAT = `הקובץ חייב להכיל שורת כותרות ראשונה עם העמודות הבאות (בעברית או באנגלית):
 • שם פרטי (חובה)
@@ -29,15 +30,6 @@ const RESIDENTS_EXAMPLE = [
   ["משה", "ישראלי", "רחוב הרצל 12 דירה 3", "050-1111111", ""],
   ["רחל", "כהן", "שדרות בן גוריון 5 ב'", "052-2222222", "קשיש"],
 ]
-
-interface VolunteerItem {
-  id: number
-  first_name: string
-  last_name: string
-  phone: string
-  group_tag: string | null
-  living_area: string | null
-}
 
 interface EventDetail {
   id: number
@@ -57,18 +49,11 @@ interface ResidentRow {
   updated_at: string | null
 }
 
-interface EventVolunteerRow {
-  id: number
-  volunteer_id: number
-  volunteer_name: string
-  status: string
-  magic_token: string
-}
-
 interface LogRow {
   id: number
   message: string
   author_type: string
+  author_name?: string | null
   created_at: string | null
 }
 
@@ -78,26 +63,21 @@ const STATUS_LABELS: Record<string, string> = {
   injured: "נפגע",
   evacuated: "פונה",
   absent: "נעדר",
-  pending: "טרם הגיב",
-  coming: "מגיע",
-  not_coming: "לא מגיע",
-  arrived: "הגיע לאירוע",
 }
 
 export function ControlRoomPage() {
   const { eventId } = useParams<{ eventId: string }>()
   const id = eventId ? parseInt(eventId, 10) : NaN
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const [logMessage, setLogMessage] = useState("")
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
-  const [volunteersModalOpen, setVolunteersModalOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [uploadResult, setUploadResult] = useState<{ imported: number; errors: string[] } | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
-  const [volunteerFilter, setVolunteerFilter] = useState("")
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [activeTab, setActiveTab] = useState("residents")
+  const [shareLinkModalOpen, setShareLinkModalOpen] = useState(false)
 
   // Live updates: when volunteers update residents/casuals/log, refetch control room data
   useEffect(() => {
@@ -113,7 +93,6 @@ export function ControlRoomPage() {
         if (data?.type === "event_updated") {
           queryClient.invalidateQueries({ queryKey: ["event", id] })
           queryClient.invalidateQueries({ queryKey: ["event-residents", id] })
-          queryClient.invalidateQueries({ queryKey: ["event-volunteers", id] })
           queryClient.invalidateQueries({ queryKey: ["event-log", id] })
         }
       } catch {
@@ -131,15 +110,18 @@ export function ControlRoomPage() {
     enabled: Number.isInteger(id),
   })
 
+  // After create event: open share modal and clear state so it doesn’t reopen on refresh
+  useEffect(() => {
+    const state = location.state as { openShareModal?: boolean } | undefined
+    if (event && state?.openShareModal) {
+      setShareLinkModalOpen(true)
+      navigate(location.pathname, { replace: true, state: {} })
+    }
+  }, [event, location.state, location.pathname, navigate])
+
   const { data: residents, isLoading: loadingResidents } = useQuery({
     queryKey: ["event-residents", id],
     queryFn: () => apiRequest<ResidentRow[]>(`/api/v1/events/${id}/residents`),
-    enabled: Number.isInteger(id),
-  })
-
-  const { data: eventVolunteers } = useQuery({
-    queryKey: ["event-volunteers", id],
-    queryFn: () => apiRequest<EventVolunteerRow[]>(`/api/v1/events/${id}/event-volunteers`),
     enabled: Number.isInteger(id),
   })
 
@@ -147,12 +129,6 @@ export function ControlRoomPage() {
     queryKey: ["event-log", id],
     queryFn: () => apiRequest<LogRow[]>(`/api/v1/events/${id}/log`),
     enabled: Number.isInteger(id),
-  })
-
-  const { data: volunteers, isLoading: loadingVolunteers } = useQuery({
-    queryKey: ["volunteers"],
-    queryFn: () => apiRequest<VolunteerItem[]>("/api/v1/volunteers"),
-    enabled: volunteersModalOpen,
   })
 
   const addLogMutation = useMutation({
@@ -166,30 +142,6 @@ export function ControlRoomPage() {
       setLogMessage("")
     },
   })
-
-  const filteredVolunteers =
-    volunteers?.filter((v) => {
-      if (!volunteerFilter.trim()) return true
-      const q = volunteerFilter.trim().toLowerCase()
-      const tag = (v.group_tag ?? "").toLowerCase()
-      const area = (v.living_area ?? "").toLowerCase()
-      return tag.includes(q) || area.includes(q)
-    }) ?? []
-
-  function toggleAllVolunteers() {
-    if (selectedIds.size === filteredVolunteers.length) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(filteredVolunteers.map((v) => v.id)))
-    }
-  }
-
-  function toggleOneVolunteer(volunteerId: number) {
-    const next = new Set(selectedIds)
-    if (next.has(volunteerId)) next.delete(volunteerId)
-    else next.add(volunteerId)
-    setSelectedIds(next)
-  }
 
   async function handleUpload() {
     if (!id || !file) return
@@ -206,26 +158,6 @@ export function ControlRoomPage() {
       queryClient.invalidateQueries({ queryKey: ["event-residents", id] })
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "שגיאה בהעלאה")
-    }
-  }
-
-  async function handleAttachVolunteers() {
-    if (!id || selectedIds.size === 0) return
-    try {
-      const res = await apiRequest<{ attached: number; invites_sent: number }>(
-        `/api/v1/events/${id}/volunteers`,
-        { method: "POST", body: JSON.stringify({ volunteer_ids: Array.from(selectedIds) }) }
-      )
-      queryClient.invalidateQueries({ queryKey: ["event-volunteers", id] })
-      setVolunteersModalOpen(false)
-      setSelectedIds(new Set())
-      const msg =
-        res.invites_sent > 0
-          ? `צורפו ${res.attached} מתנדבים. נשלחו ${res.invites_sent} הזמנות לווטסאפ.`
-          : `צורפו ${res.attached} מתנדבים.`
-      alert(msg)
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "שגיאה")
     }
   }
 
@@ -256,11 +188,11 @@ export function ControlRoomPage() {
           <p className="text-muted-foreground">{event.address}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => setShareLinkModalOpen(true)}>
+            קישור לאירוע
+          </Button>
           <Button variant="outline" onClick={() => setUploadModalOpen(true)}>
             העלאת קובץ תושבים
-          </Button>
-          <Button variant="outline" onClick={() => setVolunteersModalOpen(true)}>
-            צרף מתנדבים לאירוע
           </Button>
           <Button
             variant="outline"
@@ -304,7 +236,6 @@ export function ControlRoomPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
         <TabsList>
           <TabsTrigger value="residents">תושבים</TabsTrigger>
-          <TabsTrigger value="volunteers">סטטוס מתנדבים</TabsTrigger>
           <TabsTrigger value="log">יומן אירוע</TabsTrigger>
         </TabsList>
         <TabsContent value="residents">
@@ -350,38 +281,6 @@ export function ControlRoomPage() {
             </CardContent>
           </Card>
         </TabsContent>
-        <TabsContent value="volunteers">
-          <Card>
-            <CardHeader>
-              <CardTitle>סטטוס מתנדבים</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {!eventVolunteers?.length && (
-                <p className="text-sm text-muted-foreground py-6 text-center">
-                  אין מתנדבים צמודים לאירוע. צרף מתנדבים מהכפתור למעלה.
-                </p>
-              )}
-              {eventVolunteers && eventVolunteers.length > 0 && (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>מתנדב</TableHead>
-                      <TableHead>סטטוס</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {eventVolunteers.map((ev) => (
-                      <TableRow key={ev.id}>
-                        <TableCell>{ev.volunteer_name}</TableCell>
-                        <TableCell>{STATUS_LABELS[ev.status] ?? ev.status}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
         <TabsContent value="log">
           <Card>
             <CardHeader>
@@ -395,7 +294,8 @@ export function ControlRoomPage() {
                   logEntries.map((e) => (
                     <div key={e.id} className="text-sm">
                       <span className="text-muted-foreground">
-                        {e.created_at ? new Date(e.created_at).toLocaleString("he-IL") : ""} [{e.author_type}]
+                        {e.created_at ? new Date(e.created_at).toLocaleString("he-IL") : ""}{" "}
+                        {e.author_name ? `(${e.author_name})` : `[${e.author_type}]`}
                       </span>{" "}
                       {e.message}
                     </div>
@@ -503,71 +403,11 @@ export function ControlRoomPage() {
         </div>
       )}
 
-      {/* Add volunteers modal */}
-      {volunteersModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          dir="rtl"
-          onClick={() => setVolunteersModalOpen(false)}
-          onKeyDown={(e) => e.key === "Escape" && setVolunteersModalOpen(false)}
-          role="dialog"
-          aria-modal="true"
-        >
-          <Card className="mx-4 w-full max-w-md max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <CardHeader className="flex-shrink-0">
-              <CardTitle>צרף מתנדבים לאירוע</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 overflow-hidden flex flex-col">
-              <Input
-                placeholder="סינון לפי קבוצה או אזור מגורים"
-                value={volunteerFilter}
-                onChange={(e) => setVolunteerFilter(e.target.value)}
-              />
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={toggleAllVolunteers}>
-                  {selectedIds.size === filteredVolunteers.length && filteredVolunteers.length > 0
-                    ? "בטל הכל"
-                    : "בחר הכל"}
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  נבחרו {selectedIds.size} מתנדבים
-                </span>
-              </div>
-              {loadingVolunteers && <p className="text-sm text-muted-foreground">טוען מתנדבים...</p>}
-              <ul className="border rounded p-2 overflow-auto flex-1 min-h-0 max-h-64 space-y-1">
-                {filteredVolunteers.length === 0 && (
-                  <li className="text-sm text-muted-foreground">אין מתנדבים להתאמה</li>
-                )}
-                {filteredVolunteers.map((v) => (
-                  <li key={v.id} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(v.id)}
-                      onChange={() => toggleOneVolunteer(v.id)}
-                    />
-                    <span className="text-sm">
-                      {v.first_name} {v.last_name}
-                      {(v.group_tag || v.living_area) && (
-                        <span className="text-muted-foreground">
-                          {" "}
-                          — {[v.group_tag, v.living_area].filter(Boolean).join(" · ")}
-                        </span>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <div className="flex gap-2 flex-shrink-0">
-                <Button onClick={() => handleAttachVolunteers()} disabled={selectedIds.size === 0}>
-                  צרף לאירוע
-                </Button>
-                <Button variant="outline" onClick={() => setVolunteersModalOpen(false)}>
-                  סגור
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+      {shareLinkModalOpen && (
+        <ShareLinkModal
+          joinUrl={`${window.location.origin}/event/join/${id}`}
+          onClose={() => setShareLinkModalOpen(false)}
+        />
       )}
     </div>
   )
