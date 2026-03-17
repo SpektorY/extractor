@@ -6,7 +6,14 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.models import Event, EventLog, EventVolunteer, Resident, Volunteer
+from app.models import (
+    Event,
+    EventLog,
+    EventVolunteer,
+    Resident,
+    Volunteer,
+    VolunteerAttendanceStatus,
+)
 from app.models.resident import ResidentStatus, ResidentSource
 from app.models.event_log import EventLogAuthorType
 from app.services.event_broadcast import broadcast_event_updated_sync
@@ -19,6 +26,8 @@ class EventByTokenResponse(BaseModel):
     event_name: str
     event_address: str
     event_description: Optional[str] = None
+    attendance_status: Optional[str] = None
+    volunteer_name: Optional[str] = None
 
 
 def get_event_volunteer_by_token(
@@ -32,7 +41,11 @@ def get_event_volunteer_by_token(
         )
     event = (
         db.query(Event)
-        .filter(Event.id == ev.event_id, Event.deleted_at.is_(None))
+        .filter(
+            Event.id == ev.event_id,
+            Event.deleted_at.is_(None),
+            Event.archived_at.is_(None),
+        )
         .first()
     )
     if not event:
@@ -43,6 +56,22 @@ def get_event_volunteer_by_token(
     return ev
 
 
+def require_arrived_event_volunteer_by_token(
+    token: str,
+    db: Session = Depends(get_db),
+) -> EventVolunteer:
+    ev = get_event_volunteer_by_token(token, db)
+    if ev.status == VolunteerAttendanceStatus.ARRIVED:
+        return ev
+    if ev.status == VolunteerAttendanceStatus.NOT_COMING:
+        detail = "סימנת שאינך מגיע/ה לאירוע."
+    elif ev.status == VolunteerAttendanceStatus.LEFT:
+        detail = "סימנת שעזבת את האירוע."
+    else:
+        detail = "יש לאשר הגעה לאירוע לפני כניסה ללוח המתנדבים."
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 @router.get("/event-by-token/{token}", response_model=EventByTokenResponse)
 def get_event_by_token(
     token: str,
@@ -50,12 +79,46 @@ def get_event_by_token(
 ) -> EventByTokenResponse:
     ev = get_event_volunteer_by_token(token, db)
     event = db.query(Event).filter(Event.id == ev.event_id).first()
+    volunteer = db.query(Volunteer).filter(Volunteer.id == ev.volunteer_id).first()
     return EventByTokenResponse(
         event_id=event.id,
         event_name=event.name,
         event_address=event.address,
         event_description=event.description or None,
+        attendance_status=ev.status.value if ev.status else None,
+        volunteer_name=(
+            f"{volunteer.first_name} {volunteer.last_name}".strip() if volunteer else None
+        ),
     )
+
+
+class VolunteerAttendanceUpdateRequest(BaseModel):
+    status: str
+
+
+class VolunteerAttendanceResponse(BaseModel):
+    status: str
+
+
+@router.post(
+    "/event-by-token/{token}/attendance",
+    response_model=VolunteerAttendanceResponse,
+)
+def update_volunteer_attendance(
+    token: str,
+    body: VolunteerAttendanceUpdateRequest,
+    db: Session = Depends(get_db),
+) -> VolunteerAttendanceResponse:
+    ev = get_event_volunteer_by_token(token, db)
+    try:
+        ev.status = VolunteerAttendanceStatus(body.status)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="סטטוס הגעה לא תקין"
+        )
+    db.commit()
+    broadcast_event_updated_sync(ev.event_id)
+    return VolunteerAttendanceResponse(status=ev.status.value)
 
 
 class ResidentRow(BaseModel):
@@ -72,7 +135,7 @@ class ResidentRow(BaseModel):
 def get_residents_by_token(
     token: str, db: Session = Depends(get_db)
 ) -> List[ResidentRow]:
-    ev = get_event_volunteer_by_token(token, db)
+    ev = require_arrived_event_volunteer_by_token(token, db)
     rows = db.query(Resident).filter(Resident.event_id == ev.event_id).all()
     return [
         ResidentRow(
@@ -100,7 +163,7 @@ def update_resident(
     body: ResidentUpdateRequest,
     db: Session = Depends(get_db),
 ) -> dict:
-    ev = get_event_volunteer_by_token(token, db)
+    ev = require_arrived_event_volunteer_by_token(token, db)
     resident = (
         db.query(Resident)
         .filter(
@@ -154,7 +217,7 @@ def add_resident_by_token(
     db: Session = Depends(get_db),
 ) -> AddResidentResponse:
     """Add a casual resident (מזדמן) from the field."""
-    ev = get_event_volunteer_by_token(token, db)
+    ev = require_arrived_event_volunteer_by_token(token, db)
     try:
         status_enum = ResidentStatus(body.status)
     except ValueError:
@@ -187,7 +250,7 @@ class LogEntry(BaseModel):
 
 @router.get("/event-by-token/{token}/log", response_model=List[LogEntry])
 def get_event_log(token: str, db: Session = Depends(get_db)) -> List[LogEntry]:
-    ev = get_event_volunteer_by_token(token, db)
+    ev = require_arrived_event_volunteer_by_token(token, db)
     rows = (
         db.query(EventLog)
         .filter(EventLog.event_id == ev.event_id)
@@ -236,7 +299,7 @@ def add_event_log(
     body: LogCreate,
     db: Session = Depends(get_db),
 ) -> LogEntry:
-    ev = get_event_volunteer_by_token(token, db)
+    ev = require_arrived_event_volunteer_by_token(token, db)
     log = EventLog(
         event_id=ev.event_id,
         message=body.message,

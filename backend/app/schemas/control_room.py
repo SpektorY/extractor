@@ -20,7 +20,19 @@ class EventVolunteerRow(BaseModel):
     id: int
     volunteer_id: int
     volunteer_name: str
+    volunteer_phone: Optional[str] = None
     magic_token: str
+    status: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class ControlRoomSummary(BaseModel):
+    total_residents: int
+    unchecked_residents: int
+    critical_residents: int
+    arrived_volunteers: int
+    not_coming_volunteers: int
+    casual_residents: int
 
 
 class EventLogRow(BaseModel):

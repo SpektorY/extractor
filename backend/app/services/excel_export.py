@@ -1,7 +1,8 @@
-"""Export event data to Excel."""
-from io import BytesIO
-from typing import List, TypedDict, Optional
+"""Export residents and event log to Excel."""
 from datetime import datetime
+from io import BytesIO
+from typing import List, Optional, TypedDict
+
 import openpyxl
 
 from app.models import Event, Resident
@@ -10,12 +11,8 @@ from app.models import Event, Resident
 class LogEntryForExport(TypedDict):
     created_at: Optional[datetime]
     author_type: str
-    message: str
     author_name: str
-
-
-def _resident_display_name(r: Resident) -> str:
-    return f"{(r.first_name or '')} {(r.last_name or '')}".strip() or "—"
+    message: str
 
 
 def export_event_to_excel(
@@ -26,28 +23,62 @@ def export_event_to_excel(
     buffer = BytesIO()
     wb = openpyxl.Workbook()
     ws1 = wb.active
-    ws1.title = "תושבים"
-    ws1.append(["סוג", "שם", "כתובת", "טלפון", "סטטוס", "הערות"])
+    ws1.title = "גיליון1"
+    ws1.append(
+        [
+            "מספר זהות",
+            "שם משפחה",
+            "שם פרטי",
+            "מין",
+            "ישוב",
+            "רחוב",
+            "מס' בית",
+            "דירה",
+            "גיל",
+            "טלפון נייד",
+            "טלפון בבית",
+            "הערות מקדימות",
+            "סטטוס נוכחי",
+            "הערות מתנדב",
+            "מקור",
+            "עודכן לאחרונה",
+        ]
+    )
     for r in residents:
-        kind = "מזדמן" if r.source == "casual" else "תושב"
-        ws1.append([
-            kind,
-            _resident_display_name(r),
-            r.address,
-            r.phone or "",
-            r.status.value,
-            r.volunteer_notes or r.notes or "",
-        ])
+        ws1.append(
+            [
+                r.identity_number or "",
+                r.last_name or "",
+                r.first_name or "",
+                r.gender or "",
+                r.city or "",
+                r.street or "",
+                r.house_number or "",
+                r.apartment or "",
+                r.age if r.age is not None else "",
+                r.phone or "",
+                r.home_phone or "",
+                r.notes or "",
+                r.status.value,
+                r.volunteer_notes or "",
+                r.source or "",
+                r.updated_at.isoformat() if r.updated_at else "",
+            ]
+        )
+
     ws2 = wb.create_sheet("יומן אירוע")
-    ws2.append(["תאריך", "סוג", "כותב", "הודעה"])
-    for e in log_entries:
-        created = e["created_at"]
-        ws2.append([
-            created.isoformat() if created else "",
-            e["author_type"],
-            e["author_name"],
-            e["message"],
-        ])
+    ws2.append(["תאריך", "סוג כותב", "שם כותב", "הודעה"])
+    for entry in log_entries:
+        created_at = entry["created_at"]
+        ws2.append(
+            [
+                created_at.isoformat() if created_at else "",
+                entry["author_type"],
+                entry["author_name"],
+                entry["message"],
+            ]
+        )
+
     wb.save(buffer)
     buffer.seek(0)
     return buffer

@@ -1,6 +1,6 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useState, useEffect } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -36,6 +36,7 @@ interface EventDetail {
   name: string
   address: string
   description: string | null
+  archived_at: string | null
 }
 
 interface ResidentRow {
@@ -57,6 +58,16 @@ interface LogRow {
   created_at: string | null
 }
 
+interface VolunteerRow {
+  id: number
+  volunteer_id: number
+  volunteer_name: string
+  volunteer_phone: string | null
+  status: "coming" | "not_coming" | "arrived" | "left" | null
+  updated_at: string | null
+  magic_token: string
+}
+
 const STATUS_LABELS: Record<string, string> = {
   unchecked: "טרם נבדק",
   healthy: "בריא",
@@ -65,6 +76,22 @@ const STATUS_LABELS: Record<string, string> = {
   absent: "נעדר",
 }
 
+const VOLUNTEER_STATUS_LABELS: Record<string, string> = {
+  coming: "מגיע",
+  not_coming: "לא מגיע",
+  arrived: "הגיע",
+  left: "עזב",
+}
+
+const STATUS_COLORS: Record<string, { stroke: string; bgClass: string }> = {
+  unchecked: { stroke: "#94a3b8", bgClass: "bg-slate-400" },
+  healthy: { stroke: "#22c55e", bgClass: "bg-green-500" },
+  injured: { stroke: "#ef4444", bgClass: "bg-red-500" },
+  evacuated: { stroke: "#f97316", bgClass: "bg-orange-500" },
+  absent: { stroke: "#64748b", bgClass: "bg-slate-600" },
+}
+
+const STATUS_PRIORITY = ["unchecked", "injured", "evacuated", "absent", "healthy"] as const
 export function ControlRoomPage() {
   const { eventId } = useParams<{ eventId: string }>()
   const id = eventId ? parseInt(eventId, 10) : NaN
@@ -78,6 +105,7 @@ export function ControlRoomPage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState("residents")
   const [shareLinkModalOpen, setShareLinkModalOpen] = useState(false)
+  const [closeModalOpen, setCloseModalOpen] = useState(false)
 
   // Live updates: when volunteers update residents/casuals/log, refetch control room data
   useEffect(() => {
@@ -87,6 +115,7 @@ export function ControlRoomPage() {
     const token = localStorage.getItem("access_token")
     if (!token) return
     const ws = new WebSocket(`${wsBase}/api/v1/events/${id}/ws?token=${encodeURIComponent(token)}`)
+    let shouldCloseAfterConnect = false
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
@@ -94,13 +123,26 @@ export function ControlRoomPage() {
           queryClient.invalidateQueries({ queryKey: ["event", id] })
           queryClient.invalidateQueries({ queryKey: ["event-residents", id] })
           queryClient.invalidateQueries({ queryKey: ["event-log", id] })
+          queryClient.invalidateQueries({ queryKey: ["event-volunteers", id] })
         }
       } catch {
         // ignore parse errors
       }
     }
+    ws.onopen = () => {
+      if (shouldCloseAfterConnect) {
+        ws.close()
+      }
+    }
+    ws.onerror = () => {
+      // Avoid noisy dev-console errors during StrictMode mount/unmount.
+    }
     return () => {
-      ws.close()
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close()
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        shouldCloseAfterConnect = true
+      }
     }
   }, [id, queryClient])
 
@@ -128,6 +170,12 @@ export function ControlRoomPage() {
   const { data: logEntries } = useQuery({
     queryKey: ["event-log", id],
     queryFn: () => apiRequest<LogRow[]>(`/api/v1/events/${id}/log`),
+    enabled: Number.isInteger(id),
+  })
+
+  const { data: volunteers, isLoading: loadingVolunteers } = useQuery({
+    queryKey: ["event-volunteers", id],
+    queryFn: () => apiRequest<VolunteerRow[]>(`/api/v1/events/${id}/event-volunteers`),
     enabled: Number.isInteger(id),
   })
 
@@ -161,6 +209,28 @@ export function ControlRoomPage() {
     }
   }
 
+  const statusChartData = useMemo(() => {
+    const allResidents = residents ?? []
+    const total = allResidents.length
+
+    return STATUS_PRIORITY.map((key) => ({
+      key,
+      label: STATUS_LABELS[key],
+      count: allResidents.filter((resident) => resident.status === key).length,
+    })).map((item) => ({
+      ...item,
+      percentage: total > 0 ? Math.round((item.count / total) * 100) : 0,
+      fraction: total > 0 ? item.count / total : 0,
+      stroke: STATUS_COLORS[item.key].stroke,
+      bgClass: STATUS_COLORS[item.key].bgClass,
+    }))
+  }, [residents])
+  const uncheckedResidents = statusChartData.find((item) => item.key === "unchecked")
+  const visibleStatusRows = statusChartData.filter((item) => item.count > 0)
+  const zeroStatusRows = statusChartData.filter((item) => item.count === 0)
+  const arrivedVolunteersCount =
+    volunteers?.filter((volunteer) => volunteer.status === "arrived").length ?? 0
+
   if (!Number.isInteger(id) || isNaN(id)) {
     return (
       <div className="container mx-auto p-6" dir="rtl">
@@ -177,6 +247,8 @@ export function ControlRoomPage() {
     return <div className="container mx-auto p-6 text-muted-foreground">טוען...</div>
   }
 
+  const isArchived = Boolean(event.archived_at)
+
   return (
     <div className="container mx-auto p-6" dir="rtl">
       <div className="flex items-center justify-between">
@@ -188,10 +260,10 @@ export function ControlRoomPage() {
           <p className="text-muted-foreground">{event.address}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => setShareLinkModalOpen(true)}>
+          <Button variant="outline" onClick={() => setShareLinkModalOpen(true)} disabled={isArchived}>
             קישור לאירוע
           </Button>
-          <Button variant="outline" onClick={() => setUploadModalOpen(true)}>
+          <Button variant="outline" onClick={() => setUploadModalOpen(true)} disabled={isArchived}>
             העלאת קובץ תושבים
           </Button>
           <Button
@@ -214,28 +286,126 @@ export function ControlRoomPage() {
           >
             הורד דוח אקסל
           </Button>
-          <Button
-            variant="destructive"
-            className="ms-2"
-            onClick={async () => {
-              if (!confirm("למחוק את האירוע? רשימת התושבים והדיווחים יימחקו. רשימת המתנדבים הכללית לא תימחק.")) return
-              try {
-                await apiRequest(`/api/v1/events/${id}`, { method: "DELETE" })
-                queryClient.invalidateQueries({ queryKey: ["events"] })
-                navigate("/admin", { replace: true })
-              } catch (e) {
-                alert(e instanceof Error ? e.message : "שגיאה")
-              }
-            }}
-          >
-            מחק אירוע
-          </Button>
+          {!isArchived && (
+            <Button
+              variant="destructive"
+              className="ms-2"
+              onClick={() => setCloseModalOpen(true)}
+            >
+              סגור אירוע
+            </Button>
+          )}
         </div>
       </div>
+
+      {isArchived && (
+        <Card className="mt-6 border-amber-300 bg-amber-50/60">
+          <CardContent className="pt-6">
+            <p className="font-medium">האירוע הועבר לארכיון</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              אפשר לצפות במידע בלבד. מתנדבים ומנהלים לא יכולים לעדכן יותר את האירוע.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      <section className="mt-6">
+        <div className="grid gap-2 lg:grid-cols-[180px_180px_180px_minmax(0,1fr)]">
+          <Card>
+            <CardHeader className="space-y-1 p-4 pb-2">
+              <CardTitle className="text-sm">סה"כ תושבים</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <p className="text-2xl font-bold leading-none">{loadingResidents ? "..." : residents?.length ?? 0}</p>
+              <p className="mt-1 text-xs text-muted-foreground">כלל התושבים המשויכים לאירוע</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="space-y-1 p-4 pb-2">
+              <CardTitle className="text-sm">מתנדבים באירוע</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <p className="text-2xl font-bold leading-none">{loadingVolunteers ? "..." : arrivedVolunteersCount}</p>
+              <p className="mt-1 text-xs text-muted-foreground">רק מתנדבים שסימנו שהגיעו לאירוע</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="space-y-1 p-4 pb-2">
+              <CardTitle className="text-sm">טרם נבדק</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <p className="text-2xl font-bold leading-none">{loadingResidents ? "..." : uncheckedResidents?.count ?? 0}</p>
+              <p className="mt-1 text-xs text-muted-foreground">תושבים שעדיין ממתינים לבדיקה</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="space-y-1 p-4 pb-2">
+              <CardTitle className="text-sm">התפלגות סטטוס תושבים</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              {loadingResidents ? (
+                <p className="text-sm text-muted-foreground">טוען...</p>
+              ) : (residents?.length ?? 0) === 0 ? (
+                <p className="text-sm text-muted-foreground">אין עדיין תושבים להצגה.</p>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">מבט מהיר על תושבים שכבר קיבלו סטטוס</span>
+                      <span className="font-medium">{visibleStatusRows.reduce((sum, item) => sum + item.count, 0)} תושבים</span>
+                    </div>
+                    <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
+                      {visibleStatusRows.map((item) => (
+                        <div
+                          key={item.key}
+                          className={item.bgClass}
+                          style={{ width: `${Math.max(item.fraction * 100, 0)}%` }}
+                          title={`${item.label}: ${item.count} (${item.percentage}%)`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                    {visibleStatusRows.map((item) => (
+                      <div key={item.key} className="min-w-0 rounded-md border px-2.5 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full ${item.bgClass}`} />
+                          <span className="text-xs font-medium">{item.label}</span>
+                        </div>
+                        <div className="mt-2 flex items-end justify-between gap-2">
+                          <div>
+                            <p className="text-lg font-semibold leading-none">{item.count}</p>
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">תושבים</p>
+                          </div>
+                          <div className="text-left">
+                            <p className="text-xs font-medium">{item.percentage}%</p>
+                            <p className="text-[11px] text-muted-foreground">מהאירוע</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {zeroStatusRows.length > 0 && (
+                    <div className="flex flex-wrap gap-x-3 gap-y-1.5 border-t pt-2 text-[11px] text-muted-foreground">
+                      {zeroStatusRows.map((item) => (
+                        <div key={item.key} className="flex items-center gap-2">
+                          <span className={`h-2 w-2 rounded-full ${item.bgClass} opacity-40`} />
+                          <span>{item.label}: 0</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </section>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
         <TabsList>
           <TabsTrigger value="residents">תושבים</TabsTrigger>
+          <TabsTrigger value="volunteers">מתנדבים</TabsTrigger>
           <TabsTrigger value="log">יומן אירוע</TabsTrigger>
         </TabsList>
         <TabsContent value="residents">
@@ -281,6 +451,43 @@ export function ControlRoomPage() {
             </CardContent>
           </Card>
         </TabsContent>
+        <TabsContent value="volunteers">
+          <Card>
+            <CardHeader>
+              <CardTitle>מתנדבים באירוע</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!volunteers?.length ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  עדיין אין מתנדבים שנרשמו לאירוע.
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>שם</TableHead>
+                      <TableHead>טלפון</TableHead>
+                      <TableHead>סטטוס</TableHead>
+                      <TableHead>עודכן</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {volunteers.map((volunteer) => (
+                      <TableRow key={volunteer.id}>
+                        <TableCell>{volunteer.volunteer_name}</TableCell>
+                        <TableCell>{volunteer.volunteer_phone ?? "—"}</TableCell>
+                        <TableCell>{volunteer.status ? VOLUNTEER_STATUS_LABELS[volunteer.status] ?? volunteer.status : "טרם השיב"}</TableCell>
+                        <TableCell>
+                          {volunteer.updated_at ? new Date(volunteer.updated_at).toLocaleString("he-IL") : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
         <TabsContent value="log">
           <Card>
             <CardHeader>
@@ -307,11 +514,12 @@ export function ControlRoomPage() {
                   placeholder="הודעה לכלל המתנדבים"
                   value={logMessage}
                   onChange={(e) => setLogMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addLogMutation.mutate(logMessage)}
+                  onKeyDown={(e) => e.key === "Enter" && !isArchived && addLogMutation.mutate(logMessage)}
+                  disabled={isArchived}
                 />
                 <Button
                   onClick={() => addLogMutation.mutate(logMessage)}
-                  disabled={!logMessage.trim() || addLogMutation.isPending}
+                  disabled={!logMessage.trim() || addLogMutation.isPending || isArchived}
                 >
                   שלח
                 </Button>
@@ -322,7 +530,7 @@ export function ControlRoomPage() {
       </Tabs>
 
       {/* Upload residents modal */}
-      {uploadModalOpen && (
+      {uploadModalOpen && !isArchived && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
           dir="rtl"
@@ -403,11 +611,55 @@ export function ControlRoomPage() {
         </div>
       )}
 
-      {shareLinkModalOpen && (
+      {shareLinkModalOpen && !isArchived && (
         <ShareLinkModal
           joinUrl={`${window.location.origin}/event/join/${id}`}
           onClose={() => setShareLinkModalOpen(false)}
         />
+      )}
+
+      {closeModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          dir="rtl"
+          onClick={() => setCloseModalOpen(false)}
+          onKeyDown={(e) => e.key === "Escape" && setCloseModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <Card className="mx-4 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <CardHeader>
+              <CardTitle>סגירת אירוע</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                לאחר סגירת האירוע הוא יעבור לארכיון, מתנדבים לא יוכלו לעדכן יותר דבר,
+                והאירוע יישאר זמין לצפייה בלבד.
+              </p>
+              <p className="font-medium">{event.name}</p>
+              <div className="flex gap-2">
+                <Button
+                  variant="destructive"
+                  onClick={async () => {
+                    try {
+                      await apiRequest(`/api/v1/events/${id}/close`, { method: "POST" })
+                      queryClient.invalidateQueries({ queryKey: ["events"] })
+                      queryClient.invalidateQueries({ queryKey: ["event", id] })
+                      navigate("/admin", { replace: true })
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : "שגיאה")
+                    }
+                  }}
+                >
+                  סגור אירוע
+                </Button>
+                <Button variant="outline" onClick={() => setCloseModalOpen(false)}>
+                  ביטול
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
   )

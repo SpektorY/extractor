@@ -25,6 +25,14 @@ class Resident(Base, TimestampMixin):
     # Name: first_name + last_name (uploaded); casuals use first_name only, last_name null
     first_name = Column(String(100), nullable=True)
     last_name = Column(String(100), nullable=True)
+    identity_number = Column(String(20), nullable=True)
+    gender = Column(String(20), nullable=True)
+    city = Column(String(100), nullable=True)
+    street = Column(String(255), nullable=True)
+    house_number = Column(String(20), nullable=True)
+    apartment = Column(String(20), nullable=True)
+    age = Column(Integer, nullable=True)
+    home_phone = Column(String(20), nullable=True)
     address = Column(String(500), nullable=False)
     phone = Column(String(20), nullable=True)
     notes = Column(Text, nullable=True)  # pre-event notes

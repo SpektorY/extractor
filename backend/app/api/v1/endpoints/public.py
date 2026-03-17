@@ -17,6 +17,8 @@ class EventJoinPublicResponse(BaseModel):
 
     id: int
     name: str
+    address: str
+    description: Optional[str] = None
 
 
 class JoinEventRequest(BaseModel):
@@ -31,6 +33,24 @@ class JoinEventRequest(BaseModel):
 
 class JoinEventResponse(BaseModel):
     magic_token: str
+    attendance_status: Optional[str] = None
+
+
+def get_public_joinable_event(event_id: int, db: Session) -> Event:
+    event = (
+        db.query(Event)
+        .filter(
+            Event.id == event_id,
+            Event.deleted_at.is_(None),
+            Event.archived_at.is_(None),
+        )
+        .first()
+    )
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
+        )
+    return event
 
 
 @router.get("/event/{event_id}", response_model=EventJoinPublicResponse)
@@ -38,14 +58,13 @@ def get_event_public(
     event_id: int, db: Session = Depends(get_db)
 ) -> EventJoinPublicResponse:
     """Public: minimal event info for the volunteer join page (no auth)."""
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
+    event = get_public_joinable_event(event_id, db)
+    return EventJoinPublicResponse(
+        id=event.id,
+        name=event.name,
+        address=event.address,
+        description=event.description or None,
     )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
-    return EventJoinPublicResponse(id=event.id, name=event.name)
 
 
 @router.post("/event/{event_id}/join")
@@ -59,13 +78,7 @@ def join_event(
     attach to event if needed and return volunteer token. If new volunteer, return need_details
     and frontend shows form; then POST again with first_name (and optional details).
     """
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_public_joinable_event(event_id, db)
 
     phone = (body.phone or "").strip()
     if not phone:
@@ -97,7 +110,10 @@ def join_event(
             db.add(ev)
             db.commit()
             db.refresh(ev)
-        return JoinEventResponse(magic_token=ev.magic_token)
+        return JoinEventResponse(
+            magic_token=ev.magic_token,
+            attendance_status=ev.status.value if ev.status else None,
+        )
 
     # New volunteer: require first_name
     if not (body.first_name or "").strip():
@@ -120,7 +136,10 @@ def join_event(
     db.add(ev)
     db.commit()
     db.refresh(ev)
-    return JoinEventResponse(magic_token=ev.magic_token)
+    return JoinEventResponse(
+        magic_token=ev.magic_token,
+        attendance_status=ev.status.value if ev.status else None,
+    )
 
 
 @router.post(

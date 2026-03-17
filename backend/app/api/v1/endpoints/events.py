@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List
 from fastapi import (
     APIRouter,
@@ -17,6 +18,7 @@ from app.models import Event, Resident, Volunteer, EventVolunteer, EventLog
 from app.schemas.event import EventCreate, EventResponse, EventVolunteersAttach
 from app.schemas.resident import ResidentsUploadResult
 from app.schemas.control_room import (
+    ControlRoomSummary,
     ResidentListRow,
     EventVolunteerRow,
     EventLogRow,
@@ -27,6 +29,8 @@ from app.services.excel_import import parse_residents_file
 from app.services.excel_export import export_event_to_excel
 from fastapi.responses import StreamingResponse
 from app.models.event_log import EventLogAuthorType
+from app.models.event_volunteer import VolunteerAttendanceStatus
+from app.models.resident import ResidentStatus, ResidentSource
 from app.services.event_broadcast import (
     subscribe,
     unsubscribe,
@@ -34,6 +38,26 @@ from app.services.event_broadcast import (
 )
 
 router = APIRouter()
+
+
+def get_admin_event_or_404(
+    db: Session,
+    event_id: int,
+    *,
+    require_active: bool = False,
+) -> Event:
+    query = db.query(Event).filter(
+        Event.id == event_id,
+        Event.deleted_at.is_(None),
+    )
+    if require_active:
+        query = query.filter(Event.archived_at.is_(None))
+    event = query.first()
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
+        )
+    return event
 
 
 @router.websocket("/{event_id}/ws")
@@ -81,6 +105,7 @@ def list_events(
         db.query(Event)
         .filter(Event.deleted_at.is_(None))
         .order_by(Event.created_at.desc())
+        .all()
     )
     return [EventResponse.model_validate(e) for e in events]
 
@@ -102,23 +127,30 @@ def create_event(
     return EventResponse.model_validate(event)
 
 
+@router.post("/{event_id}/close", response_model=EventResponse)
+def close_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user: AdminAuth = Depends(get_current_user),
+) -> EventResponse:
+    event = get_admin_event_or_404(db, event_id, require_active=True)
+    event.archived_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(event)
+    broadcast_event_updated_sync(event_id)
+    return EventResponse.model_validate(event)
+
+
 @router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_event(
     event_id: int,
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> None:
-    from datetime import datetime, timezone
-
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
-    event.deleted_at = datetime.now(timezone.utc)
+    event = get_admin_event_or_404(db, event_id, require_active=True)
+    event.archived_at = datetime.now(timezone.utc)
     db.commit()
+    broadcast_event_updated_sync(event_id)
     return None
 
 
@@ -128,14 +160,53 @@ def get_event(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> EventResponse:
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    event = get_admin_event_or_404(db, event_id)
     return EventResponse.model_validate(event)
+
+
+@router.get("/{event_id}/summary", response_model=ControlRoomSummary)
+def get_control_room_summary(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user: AdminAuth = Depends(get_current_user),
+) -> ControlRoomSummary:
+    get_admin_event_or_404(db, event_id)
+
+    residents = db.query(Resident).filter(Resident.event_id == event_id).all()
+    volunteers = (
+        db.query(EventVolunteer)
+        .filter(EventVolunteer.event_id == event_id)
+        .all()
+    )
+
+    critical_statuses = {
+        ResidentStatus.INJURED,
+        ResidentStatus.EVACUATED,
+        ResidentStatus.ABSENT,
+    }
+
+    return ControlRoomSummary(
+        total_residents=len(residents),
+        unchecked_residents=sum(
+            1 for resident in residents if resident.status == ResidentStatus.UNCHECKED
+        ),
+        critical_residents=sum(
+            1 for resident in residents if resident.status in critical_statuses
+        ),
+        arrived_volunteers=sum(
+            1
+            for volunteer in volunteers
+            if volunteer.status == VolunteerAttendanceStatus.ARRIVED
+        ),
+        not_coming_volunteers=sum(
+            1
+            for volunteer in volunteers
+            if volunteer.status == VolunteerAttendanceStatus.NOT_COMING
+        ),
+        casual_residents=sum(
+            1 for resident in residents if resident.source == ResidentSource.CASUAL.value
+        ),
+    )
 
 
 @router.post("/{event_id}/residents/upload", response_model=ResidentsUploadResult)
@@ -145,13 +216,7 @@ def upload_residents(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> ResidentsUploadResult:
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_admin_event_or_404(db, event_id, require_active=True)
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="נדרש קובץ")
     content = file.file.read()
@@ -168,10 +233,18 @@ def upload_residents(
     for r in rows:
         resident = Resident(
             event_id=event_id,
+            identity_number=r.identity_number,
             first_name=r.first_name,
             last_name=r.last_name,
+            gender=r.gender,
+            city=r.city,
+            street=r.street,
+            house_number=r.house_number,
+            apartment=r.apartment,
+            age=r.age,
             address=r.address,
             phone=r.phone,
+            home_phone=r.home_phone,
             notes=r.notes,
         )
         db.add(resident)
@@ -187,13 +260,7 @@ def attach_volunteers(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> dict:
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_admin_event_or_404(db, event_id, require_active=True)
     volunteers = (
         db.query(Volunteer)
         .filter(
@@ -231,13 +298,7 @@ def send_invites(
     current_user: AdminAuth = Depends(get_current_user),
 ) -> dict:
     """No-op: invite flow is now link-based; admin shares the event join link."""
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_admin_event_or_404(db, event_id, require_active=True)
     evs = db.query(EventVolunteer).filter(EventVolunteer.event_id == event_id).all()
     return {"sent": 0, "total": len(evs)}
 
@@ -248,13 +309,7 @@ def export_event_excel(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ):
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    event = get_admin_event_or_404(db, event_id)
     residents = db.query(Resident).filter(Resident.event_id == event_id).all()
     log_rows = (
         db.query(EventLog)
@@ -262,31 +317,31 @@ def export_event_excel(
         .order_by(EventLog.created_at.asc())
         .all()
     )
-    volunteer_ids = [r.author_volunteer_id for r in log_rows if r.author_volunteer_id]
+    volunteer_ids = [row.author_volunteer_id for row in log_rows if row.author_volunteer_id]
     volunteers = (
         db.query(Volunteer).filter(Volunteer.id.in_(volunteer_ids)).all()
         if volunteer_ids
         else []
     )
-    vol_names = {
-        v.id: f"{v.first_name} {v.last_name}".strip() or (v.first_name or "מתנדב")
-        for v in volunteers
+    volunteer_names = {
+        volunteer.id: f"{volunteer.first_name} {volunteer.last_name}".strip()
+        or volunteer.first_name
+        or "מתנדב"
+        for volunteer in volunteers
     }
-    log_entries = []
-    for r in log_rows:
-        author_name = (
-            (vol_names.get(r.author_volunteer_id) or "מתנדב")
-            if r.author_volunteer_id
-            else "מנהל"
-        )
-        log_entries.append(
-            {
-                "created_at": r.created_at,
-                "author_type": r.author_type.value,
-                "message": r.message,
-                "author_name": author_name,
-            }
-        )
+    log_entries = [
+        {
+            "created_at": row.created_at,
+            "author_type": row.author_type.value,
+            "author_name": (
+                volunteer_names.get(row.author_volunteer_id) or "מתנדב"
+                if row.author_volunteer_id
+                else "מנהל"
+            ),
+            "message": row.message,
+        }
+        for row in log_rows
+    ]
     buffer = export_event_to_excel(event, residents, log_entries)
     return StreamingResponse(
         buffer,
@@ -301,13 +356,7 @@ def list_event_residents(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> List[ResidentListRow]:
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_admin_event_or_404(db, event_id)
     rows = db.query(Resident).filter(Resident.event_id == event_id).all()
     return [
         ResidentListRow(
@@ -330,13 +379,7 @@ def list_event_volunteers(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> List[EventVolunteerRow]:
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_admin_event_or_404(db, event_id)
     evs = (
         db.query(EventVolunteer, Volunteer)
         .join(Volunteer, EventVolunteer.volunteer_id == Volunteer.id)
@@ -349,8 +392,11 @@ def list_event_volunteers(
         EventVolunteerRow(
             id=ev.id,
             volunteer_id=ev.volunteer_id,
-            volunteer_name=f"{v.first_name} {v.last_name}",
+            volunteer_name=f"{v.first_name} {v.last_name}".strip() or v.first_name,
+            volunteer_phone=v.phone,
             magic_token=ev.magic_token,
+            status=ev.status.value if ev.status else None,
+            updated_at=ev.updated_at,
         )
         for ev, v in evs
     ]
@@ -362,13 +408,7 @@ def list_event_log(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> List[EventLogRow]:
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_admin_event_or_404(db, event_id)
     rows = (
         db.query(EventLog)
         .filter(EventLog.event_id == event_id)
@@ -412,13 +452,7 @@ def add_event_log(
     db: Session = Depends(get_db),
     current_user: AdminAuth = Depends(get_current_user),
 ) -> EventLogRow:
-    event = (
-        db.query(Event).filter(Event.id == event_id, Event.deleted_at.is_(None)).first()
-    )
-    if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="אירוע לא נמצא"
-        )
+    get_admin_event_or_404(db, event_id, require_active=True)
     log = EventLog(
         event_id=event_id,
         message=body.message,

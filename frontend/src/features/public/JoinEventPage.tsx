@@ -28,19 +28,25 @@ type DetailsForm = z.infer<typeof detailsSchema>
 interface EventPublic {
   id: number
   name: string
+  address: string
+  description?: string | null
 }
+
+type AttendanceStatus = "coming" | "not_coming" | "arrived" | "left"
 
 interface JoinResponse {
   magic_token?: string
   need_details?: boolean
+  attendance_status?: AttendanceStatus | null
 }
 
 export function JoinEventPage() {
   const { eventId } = useParams<{ eventId: string }>()
   const navigate = useNavigate()
   const id = eventId ? parseInt(eventId, 10) : NaN
-  const [needDetails, setNeedDetails] = useState(false)
+  const [step, setStep] = useState<"phone" | "details" | "response" | "arrival" | "thank_you">("phone")
   const [phoneValue, setPhoneValue] = useState("")
+  const [eventToken, setEventToken] = useState<string | null>(null)
 
   const { data: event, isLoading: loadingEvent, error: eventError } = useQuery({
     queryKey: ["public-event", id],
@@ -66,10 +72,42 @@ export function JoinEventPage() {
     },
     onSuccess: (data) => {
       if (data.magic_token) {
-        navigate(`/event/${data.magic_token}`, { replace: true })
+        setEventToken(data.magic_token)
+        if (data.attendance_status === "arrived") {
+          navigate(`/event/${data.magic_token}`, { replace: true })
+          return
+        }
+        if (data.attendance_status === "not_coming") {
+          setStep("response")
+          return
+        }
+        if (data.attendance_status === "coming" || data.attendance_status === "left") {
+          setStep("arrival")
+          return
+        }
+        setStep("response")
       } else if (data.need_details) {
-        setNeedDetails(true)
+        setStep("details")
       }
+    },
+  })
+
+  const attendanceMutation = useMutation({
+    mutationFn: async (status: AttendanceStatus) => {
+      if (!eventToken) throw new Error("קישור האירוע לא זמין")
+      const res = await fetch(
+        `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"}/api/v1/event-by-token/${eventToken}/attendance`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        }
+      )
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(typeof err.detail === "string" ? err.detail : "שגיאה")
+      }
+      return res.json() as Promise<{ status: AttendanceStatus }>
     },
   })
 
@@ -83,16 +121,16 @@ export function JoinEventPage() {
     register: registerDetails,
     handleSubmit: handleDetailsSubmit,
     setValue: setDetailsValue,
-    formState: { errors: detailsErrors, isSubmitting: detailsSubmitting },
+    formState: { errors: detailsErrors },
   } = useForm<DetailsForm>({
     resolver: zodResolver(detailsSchema),
   })
 
   useEffect(() => {
-    if (needDetails && phoneValue) {
+    if (step === "details" && phoneValue) {
       setDetailsValue("phone", phoneValue)
     }
-  }, [needDetails, phoneValue, setDetailsValue])
+  }, [step, phoneValue, setDetailsValue])
 
   function onPhoneSubmit(data: PhoneForm) {
     setPhoneValue(data.phone)
@@ -106,6 +144,24 @@ export function JoinEventPage() {
       last_name: data.last_name,
       area: data.area,
       group_tag: data.group_tag,
+    })
+  }
+
+  function handleAttendanceChoice(status: AttendanceStatus) {
+    attendanceMutation.mutate(status, {
+      onSuccess: () => {
+        if (status === "not_coming") {
+          setStep("thank_you")
+          return
+        }
+        if (status === "coming") {
+          setStep("arrival")
+          return
+        }
+        if (status === "arrived" && eventToken) {
+          navigate(`/event/${eventToken}`, { replace: true })
+        }
+      },
     })
   }
 
@@ -145,11 +201,15 @@ export function JoinEventPage() {
         <CardHeader>
           <CardTitle>הצטרפות לאירוע: {event.name}</CardTitle>
           <p className="text-sm text-muted-foreground">
-            הזן את מספר הטלפון שלך.
+            {step === "phone" && "הזן את מספר הטלפון שלך."}
+            {step === "details" && "נראה שזו הפעם הראשונה שלך כאן. מלא/י כמה פרטים קצרים."}
+            {step === "response" && "האם את/ה מגיע/ה לאירוע?"}
+            {step === "arrival" && "כשתגיע/י לאירוע, אשר/י הגעה כדי להיכנס ללוח המתנדבים."}
+            {step === "thank_you" && "תודה שעדכנת אותנו."}
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {!needDetails ? (
+          {step === "phone" && (
             <form onSubmit={handlePhoneSubmit(onPhoneSubmit)} className="grid gap-4">
               <div className="grid gap-2">
                 <Label htmlFor="phone">טלפון</Label>
@@ -176,7 +236,9 @@ export function JoinEventPage() {
                 </p>
               )}
             </form>
-          ) : (
+          )}
+
+          {step === "details" && (
             <form onSubmit={handleDetailsSubmit(onDetailsSubmit)} className="grid gap-4">
               <input type="hidden" {...registerDetails("phone")} />
               <div className="grid grid-cols-2 gap-4">
@@ -200,8 +262,8 @@ export function JoinEventPage() {
                 <Label htmlFor="group_tag">קבוצה / התמחות</Label>
                 <Input id="group_tag" {...registerDetails("group_tag")} placeholder="אופציונלי" />
               </div>
-              <Button type="submit" className="w-full" disabled={detailsSubmitting}>
-                {detailsSubmitting ? "שולח..." : "הצטרף לאירוע"}
+              <Button type="submit" className="w-full" disabled={joinMutation.isPending}>
+                {joinMutation.isPending ? "שולח..." : "הצטרף לאירוע"}
               </Button>
               {joinMutation.isError && (
                 <p className="text-sm text-destructive">
@@ -209,6 +271,74 @@ export function JoinEventPage() {
                 </p>
               )}
             </form>
+          )}
+
+          {step === "response" && (
+            <div className="grid gap-4">
+              <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+                <p className="font-medium">{event.name}</p>
+                <p className="text-muted-foreground">{event.address}</p>
+                {event.description && (
+                  <p className="mt-2 text-muted-foreground">{event.description}</p>
+                )}
+              </div>
+              <Button
+                type="button"
+                className="h-24 text-xl"
+                disabled={attendanceMutation.isPending}
+                onClick={() => handleAttendanceChoice("coming")}
+              >
+                מגיע
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-24 text-xl"
+                disabled={attendanceMutation.isPending}
+                onClick={() => handleAttendanceChoice("not_coming")}
+              >
+                לא מגיע
+              </Button>
+              {attendanceMutation.isError && (
+                <p className="text-sm text-destructive">
+                  {attendanceMutation.error instanceof Error ? attendanceMutation.error.message : "שגיאה"}
+                </p>
+              )}
+            </div>
+          )}
+
+          {step === "arrival" && (
+            <div className="grid gap-4">
+              <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+                <p className="font-medium">{event.name}</p>
+                <p className="text-muted-foreground">{event.address}</p>
+                {event.description && (
+                  <p className="mt-2 text-muted-foreground">{event.description}</p>
+                )}
+              </div>
+              <Button
+                type="button"
+                className="h-24 text-xl"
+                disabled={attendanceMutation.isPending}
+                onClick={() => handleAttendanceChoice("arrived")}
+              >
+                הגעתי לאירוע
+              </Button>
+              {attendanceMutation.isError && (
+                <p className="text-sm text-destructive">
+                  {attendanceMutation.error instanceof Error ? attendanceMutation.error.message : "שגיאה"}
+                </p>
+              )}
+            </div>
+          )}
+
+          {step === "thank_you" && (
+            <div className="rounded-lg border bg-muted/30 p-6 text-center">
+              <p className="text-lg font-medium">תודה על העדכון</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                נעדכן את מנהל/ת האירוע שאינך מגיע/ה.
+              </p>
+            </div>
           )}
         </CardContent>
       </Card>

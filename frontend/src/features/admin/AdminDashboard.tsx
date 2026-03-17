@@ -10,6 +10,7 @@ interface EventItem {
   address: string
   description: string | null
   created_at: string | null
+  archived_at: string | null
 }
 
 export function AdminDashboard() {
@@ -18,6 +19,9 @@ export function AdminDashboard() {
     queryKey: ["events"],
     queryFn: () => apiRequest<EventItem[]>("/api/v1/events"),
   })
+
+  const activeEvents = (events ?? []).filter((event) => !event.archived_at)
+  const archivedEvents = (events ?? []).filter((event) => Boolean(event.archived_at))
 
   function handleLogout() {
     clearAccessToken()
@@ -40,14 +44,14 @@ export function AdminDashboard() {
       </div>
 
       <section className="mt-8">
-        <h2 className="text-lg font-semibold mb-4">אירועים</h2>
+        <h2 className="text-lg font-semibold mb-4">אירועים פעילים</h2>
         {isLoading && <p className="text-muted-foreground">טוען...</p>}
-        {events && events.length === 0 && (
+        {events && activeEvents.length === 0 && (
           <p className="text-muted-foreground">אין אירועים. צור אירוע חדש.</p>
         )}
-        {events && events.length > 0 && (
+        {activeEvents.length > 0 && (
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {events.map((ev) => (
+            {activeEvents.map((ev) => (
               <Card
                 key={ev.id}
                 className="cursor-pointer transition-shadow hover:shadow-md"
@@ -72,6 +76,45 @@ export function AdminDashboard() {
                     }}
                   >
                     כניסה לניהול אירוע
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="mt-10">
+        <h2 className="text-lg font-semibold mb-4">אירועים בארכיון</h2>
+        {archivedEvents.length === 0 ? (
+          <p className="text-muted-foreground">עדיין אין אירועים בארכיון.</p>
+        ) : (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {archivedEvents.map((ev) => (
+              <Card
+                key={ev.id}
+                className="cursor-pointer border-amber-300 transition-shadow hover:shadow-md"
+                onClick={() => navigate(`/admin/events/${ev.id}`)}
+              >
+                <CardHeader className="pb-2">
+                  <h3 className="font-semibold">{ev.name}</h3>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground">
+                  <p>{ev.address}</p>
+                  {ev.archived_at && (
+                    <p className="mt-1">
+                      נסגר בתאריך {new Date(ev.archived_at).toLocaleDateString("he-IL")}
+                    </p>
+                  )}
+                  <Button
+                    variant="link"
+                    className="mt-2 h-auto p-0"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/admin/events/${ev.id}`)
+                    }}
+                  >
+                    צפייה בארכיון
                   </Button>
                 </CardContent>
               </Card>

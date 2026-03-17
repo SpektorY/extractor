@@ -12,6 +12,8 @@ interface EventInfo {
   event_name: string
   event_address: string
   event_description?: string
+  attendance_status?: "coming" | "not_coming" | "arrived" | "left" | null
+  volunteer_name?: string | null
 }
 
 interface ResidentRow {
@@ -66,6 +68,25 @@ export function VolunteerEventDashboard() {
   const [editStatus, setEditStatus] = useState<string>("unchecked")
   const [editNotes, setEditNotes] = useState("")
 
+  const attendanceMutation = useMutation({
+    mutationFn: async (status: "arrived" | "left") => {
+      const r = await fetch(`${API_BASE}/api/v1/event-by-token/${token}/attendance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      })
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new Error(typeof body.detail === "string" ? body.detail : "שגיאה")
+      }
+      return r.json() as Promise<{ status: string }>
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["event-by-token", token] })
+      queryClient.invalidateQueries({ queryKey: ["volunteer-residents", token] })
+    },
+  })
+
   const { data: event, error: eventError } = useQuery({
     queryKey: ["event-by-token", token],
     queryFn: async () => {
@@ -88,7 +109,7 @@ export function VolunteerEventDashboard() {
       if (!r.ok) throw new Error("שגיאה")
       return r.json() as Promise<ResidentRow[]>
     },
-    enabled: !!token && !!event,
+    enabled: !!token && !!event && event.attendance_status === "arrived",
   })
 
   const updateResidentMutation = useMutation({
@@ -169,6 +190,68 @@ export function VolunteerEventDashboard() {
 
   if (!token || !event) return <div className="p-6 text-muted-foreground">טוען...</div>
 
+  if (event.attendance_status === "not_coming") {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6" dir="rtl">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6 text-center">
+            <p className="text-lg font-medium">תודה על העדכון</p>
+            <p className="mt-2 text-muted-foreground">סימנת שאינך מגיע/ה לאירוע.</p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (event.attendance_status === "coming" || event.attendance_status === "left") {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6" dir="rtl">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{event.event_name}</CardTitle>
+            <p className="text-muted-foreground">{event.event_address}</p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {event.event_description && (
+              <p className="text-sm text-muted-foreground">{event.event_description}</p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {event.attendance_status === "left"
+                ? "סימנת שעזבת את האירוע. אם חזרת, אשר/י הגעה מחדש."
+                : "יש לאשר הגעה לאירוע לפני כניסה ללוח המתנדבים."}
+            </p>
+            <Button
+              className="h-20 w-full text-lg"
+              disabled={attendanceMutation.isPending}
+              onClick={() => attendanceMutation.mutate("arrived")}
+            >
+              הגעתי לאירוע
+            </Button>
+            {attendanceMutation.isError && (
+              <p className="text-sm text-destructive">
+                {attendanceMutation.error instanceof Error ? attendanceMutation.error.message : "שגיאה"}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (!event.attendance_status) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6" dir="rtl">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6 text-center">
+            <p className="text-muted-foreground">
+              יש לאשר הגעה דרך קישור ההצטרפות לפני כניסה ללוח האירוע.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen" dir="rtl">
       <div className="container mx-auto p-6">
@@ -176,6 +259,9 @@ export function VolunteerEventDashboard() {
           <CardHeader>
             <CardTitle>{event.event_name}</CardTitle>
             <p className="text-muted-foreground">{event.event_address}</p>
+            {event.volunteer_name && (
+              <p className="text-sm text-muted-foreground">מתנדב/ת: {event.volunteer_name}</p>
+            )}
           </CardHeader>
         </Card>
 
@@ -186,6 +272,16 @@ export function VolunteerEventDashboard() {
             </Button>
             <Button variant="outline" onClick={() => navigate(`/event/${token}/log`)}>
               יומן אירוע
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (!window.confirm("לסמן שעזבת את האירוע?")) return
+                attendanceMutation.mutate("left")
+              }}
+              disabled={attendanceMutation.isPending}
+            >
+              עזבתי את האירוע
             </Button>
           </div>
           <Card>
