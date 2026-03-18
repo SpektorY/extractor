@@ -5,7 +5,8 @@ import { AdminLayout } from "@/features/admin/AdminLayout"
 import { VolunteerLayout } from "@/features/volunteer/VolunteerLayout"
 import { ProtectedRoute } from "@/components/ProtectedRoute"
 import { LandingPage } from "@/features/public/LandingPage"
-import { JoinEventPage } from "@/features/public/JoinEventPage"
+import { JoinEventPage } from "@/features/public/JoinEventPage.tsx"
+import { VolunteerLoginPage } from "@/features/public/VolunteerLoginPage.tsx"
 import { LoginPage } from "@/features/admin/LoginPage"
 import { AdminDashboard } from "@/features/admin/AdminDashboard"
 import { VolunteersPage } from "@/features/admin/VolunteersPage"
@@ -28,6 +29,7 @@ function App() {
           <Route path="/" element={<PublicLayout />}>
             <Route index element={<LandingPage />} />
             <Route path="login" element={<LoginPage />} />
+            <Route path="volunteer-login" element={<VolunteerLoginPage />} />
           </Route>
           <Route
             path="/admin"

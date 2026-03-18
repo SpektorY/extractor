@@ -49,8 +49,12 @@ class Settings(BaseSettings):
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_whatsapp_from: Optional[str] = None
+    twilio_sms_from: Optional[str] = None
     greenapi_instance_id: Optional[str] = None
     greenapi_token: Optional[str] = None
+
+    otp_code_length: int = 6
+    otp_expiry_minutes: int = 10
 
 
 

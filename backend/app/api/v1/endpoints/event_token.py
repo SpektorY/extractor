@@ -13,6 +13,7 @@ from app.models import (
     Resident,
     Volunteer,
     VolunteerAttendanceStatus,
+    VolunteerStatus,
 )
 from app.models.resident import ResidentStatus, ResidentSource
 from app.models.event_log import EventLogAuthorType
@@ -52,6 +53,17 @@ def get_event_volunteer_by_token(
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="האירוע הסתיים או בוטל. תודה שהתנדבת!",
+        )
+    volunteer = db.query(Volunteer).filter(Volunteer.id == ev.volunteer_id).first()
+    if not volunteer or volunteer.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="מתנדב לא נמצא",
+        )
+    if volunteer.status != VolunteerStatus.APPROVED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="החשבון ממתין לאישור מנהל",
         )
     return ev
 

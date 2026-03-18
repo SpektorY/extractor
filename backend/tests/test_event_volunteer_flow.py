@@ -1,6 +1,6 @@
 from tests.conftest import TestingSessionLocal
 
-from app.models import Resident, ResidentSource, ResidentStatus
+from app.models import Resident, ResidentSource, ResidentStatus, Volunteer, VolunteerOtp, VolunteerStatus
 
 
 def admin_headers(client):
@@ -24,24 +24,74 @@ def create_event(client, headers, *, name="אירוע בדיקה"):
     return response.json()
 
 
-def join_event(client, event_id, phone="0500000000"):
-    response = client.post(
-        f"/api/v1/public/event/{event_id}/join",
-        json={"phone": phone},
-    )
-    assert response.status_code == 200
-    assert response.json() == {"need_details": True}
+def volunteer_login_headers(client, phone="0500000000"):
+    request_otp = client.post("/api/v1/public/auth/request-otp", json={"phone": phone})
+    assert request_otp.status_code == 200
+    db = TestingSessionLocal()
+    try:
+        otp = db.query(VolunteerOtp).filter(VolunteerOtp.phone == phone).first()
+        assert otp is not None
+        code = otp.code
+    finally:
+        db.close()
+    verify = client.post("/api/v1/public/auth/verify-otp", json={"phone": phone, "code": code})
+    assert verify.status_code == 200
+    token = verify.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
+
+def approve_volunteer_by_phone(phone: str):
+    db = TestingSessionLocal()
+    try:
+        volunteer = db.query(Volunteer).filter(Volunteer.phone == phone).first()
+        assert volunteer is not None
+        volunteer.status = VolunteerStatus.APPROVED
+        db.commit()
+    finally:
+        db.close()
+
+
+def join_event(client, event_id, phone="0500000000"):
+    headers = volunteer_login_headers(client, phone=phone)
+    approve_volunteer_by_phone(phone)
     response = client.post(
         f"/api/v1/public/event/{event_id}/join",
-        json={
-            "phone": phone,
-            "first_name": "נועה",
-            "last_name": "כהן",
-        },
+        json={},
+        headers=headers,
     )
     assert response.status_code == 200
     return response.json()["magic_token"]
+
+
+def test_join_requires_login(client):
+    headers = admin_headers(client)
+    event = create_event(client, headers)
+    response = client.post(f"/api/v1/public/event/{event['id']}/join", json={})
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "LOGIN_REQUIRED"
+
+
+def test_pending_volunteer_is_blocked_until_approved(client):
+    headers = admin_headers(client)
+    event = create_event(client, headers)
+    volunteer_headers = volunteer_login_headers(client, phone="0500000099")
+
+    blocked = client.post(
+        f"/api/v1/public/event/{event['id']}/join",
+        json={},
+        headers=volunteer_headers,
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "PENDING_APPROVAL"
+
+    approve_volunteer_by_phone("0500000099")
+    joined = client.post(
+        f"/api/v1/public/event/{event['id']}/join",
+        json={},
+        headers=volunteer_headers,
+    )
+    assert joined.status_code == 200
+    assert joined.json()["magic_token"]
 
 
 def test_control_room_summary_aggregates_residents_and_volunteers(client):
@@ -154,7 +204,8 @@ def test_volunteer_attendance_flow_requires_arrival_before_dashboard_access(clie
 def test_volunteer_can_change_from_not_coming_to_coming(client):
     headers = admin_headers(client)
     event = create_event(client, headers, name="אירוע שינוי הגעה")
-    token = join_event(client, event["id"], phone="0500000004")
+    phone = "0500000004"
+    token = join_event(client, event["id"], phone=phone)
 
     mark_not_coming = client.post(
         f"/api/v1/event-by-token/{token}/attendance",
@@ -163,9 +214,11 @@ def test_volunteer_can_change_from_not_coming_to_coming(client):
     assert mark_not_coming.status_code == 200
     assert mark_not_coming.json() == {"status": "not_coming"}
 
+    volunteer_headers = volunteer_login_headers(client, phone=phone)
     rejoin = client.post(
         f"/api/v1/public/event/{event['id']}/join",
-        json={"phone": "0500000004"},
+        json={},
+        headers=volunteer_headers,
     )
     assert rejoin.status_code == 200
     assert rejoin.json()["magic_token"] == token

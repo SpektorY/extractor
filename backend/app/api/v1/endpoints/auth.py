@@ -3,7 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app.core.config import settings
-from app.core.security import create_access_token, decode_access_token, ADMIN_SUB
+from app.core.security import (
+    create_access_token,
+    decode_access_token_payload,
+    ADMIN_SUB,
+    ROLE_ADMIN,
+    ROLE_VOLUNTEER,
+)
 from app.schemas.auth import LoginRequest, TokenResponse
 
 router = APIRouter()
@@ -40,10 +46,39 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="חסר טוקן או טוקן לא תקין",
         )
-    sub = decode_access_token(credentials.credentials)
-    if sub != ADMIN_SUB:
+    payload = decode_access_token_payload(credentials.credentials)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="טוקן לא תקין או שפג תוקפו",
+        )
+    sub = payload.get("sub")
+    role = payload.get("role")
+    if sub != ADMIN_SUB or (role and role != ROLE_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="טוקן לא תקין או שפג תוקפו",
         )
     return AdminAuth()
+
+
+class VolunteerAuth:
+    def __init__(self, volunteer_id: int):
+        self.volunteer_id = volunteer_id
+
+
+def get_optional_current_volunteer(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> Optional[VolunteerAuth]:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        return None
+    payload = decode_access_token_payload(credentials.credentials)
+    if not payload:
+        return None
+    if payload.get("role") != ROLE_VOLUNTEER:
+        return None
+    try:
+        volunteer_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        return None
+    return VolunteerAuth(volunteer_id=volunteer_id)

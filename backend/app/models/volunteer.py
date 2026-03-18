@@ -1,6 +1,13 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean
+import enum
+
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Enum
 from app.models.base import TimestampMixin
 from app.core.database import Base
+
+
+class VolunteerStatus(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
 
 
 class Volunteer(Base, TimestampMixin):
@@ -16,3 +23,9 @@ class Volunteer(Base, TimestampMixin):
     anonymized = Column(
         Boolean, default=False, nullable=False
     )  # GDPR: personal data wiped
+    status = Column(
+        Enum(VolunteerStatus, name="volunteerstatus"),
+        nullable=False,
+        default=VolunteerStatus.PENDING,
+        server_default=VolunteerStatus.PENDING.name,
+    )
