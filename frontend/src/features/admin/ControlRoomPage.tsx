@@ -68,6 +68,14 @@ interface VolunteerRow {
   magic_token: string
 }
 
+interface PendingVolunteerRow {
+  id: number
+  first_name: string
+  last_name: string
+  phone: string
+  status: "pending" | "approved"
+}
+
 const STATUS_LABELS: Record<string, string> = {
   unchecked: "טרם נבדק",
   healthy: "בריא",
@@ -177,6 +185,11 @@ export function ControlRoomPage() {
     queryKey: ["event-volunteers", id],
     queryFn: () => apiRequest<VolunteerRow[]>(`/api/v1/events/${id}/event-volunteers`),
     enabled: Number.isInteger(id),
+  })
+  const { data: pendingVolunteers } = useQuery({
+    queryKey: ["pending-volunteers"],
+    queryFn: () => apiRequest<PendingVolunteerRow[]>("/api/v1/volunteers?status=pending&include_deleted=false"),
+    refetchInterval: 15000,
   })
 
   const addLogMutation = useMutation({
@@ -310,7 +323,7 @@ export function ControlRoomPage() {
       )}
 
       <section className="mt-6">
-        <div className="grid gap-2 lg:grid-cols-[180px_180px_180px_minmax(0,1fr)]">
+        <div className="grid gap-2 lg:grid-cols-5">
           <Card>
             <CardHeader className="space-y-1 p-4 pb-2">
               <CardTitle className="text-sm">סה"כ תושבים</CardTitle>
@@ -318,6 +331,22 @@ export function ControlRoomPage() {
             <CardContent className="px-4 pb-4">
               <p className="text-2xl font-bold leading-none">{loadingResidents ? "..." : residents?.length ?? 0}</p>
               <p className="mt-1 text-xs text-muted-foreground">כלל התושבים המשויכים לאירוע</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="space-y-1 p-4 pb-2">
+              <CardTitle className="text-sm">ממתינים לאישור</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <p className="text-2xl font-bold leading-none">{pendingVolunteers?.length ?? 0}</p>
+              <p className="mt-1 text-xs text-muted-foreground">ניתן לאשר בעמוד המתנדבים</p>
+              <Button
+                variant="link"
+                className="h-auto p-0 text-xs"
+                onClick={() => navigate("/admin/volunteers")}
+              >
+                מעבר לניהול מתנדבים
+              </Button>
             </CardContent>
           </Card>
           <Card>

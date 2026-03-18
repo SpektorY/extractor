@@ -2,7 +2,7 @@ from typing import List, Tuple
 from io import BytesIO, StringIO
 import csv
 import openpyxl
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.schemas.resident import ResidentRow
 
@@ -223,4 +223,109 @@ def parse_residents_file(content: bytes, filename: str) -> Tuple[List[ResidentRo
         return parse_residents_csv(content)
     if fn.endswith(".xlsx") or fn.endswith(".xls"):
         return parse_residents_excel(content)
+    return [], ["סוג קובץ לא נתמך. השתמש ב־CSV או Excel (xlsx)."]
+
+
+VOLUNTEER_COLUMN_ALIASES = {
+    "first_name": ["first_name", "first name", "שם פרטי", "שם"],
+    "last_name": ["last_name", "last name", "שם משפחה", "משפחה"],
+    "phone": ["phone", "mobile phone", "טלפון", "טלפון נייד"],
+    "group_tag": ["group_tag", "group", "קבוצה", "התמחות"],
+    "living_area": ["living_area", "area", "אזור", "אזור מגורים"],
+}
+
+
+class VolunteerImportRow(BaseModel):
+    first_name: str
+    last_name: str
+    phone: str
+    group_tag: str | None = None
+    living_area: str | None = None
+
+
+def _find_volunteer_column_index(headers: List[str]) -> dict:
+    result = {}
+    for idx, cell in enumerate(headers):
+        val = _normalize_header(str(cell) if cell is not None else "")
+        for field, aliases in VOLUNTEER_COLUMN_ALIASES.items():
+            if val in [a.strip().lower() for a in aliases]:
+                result[field] = idx
+                break
+    return result
+
+
+def parse_volunteers_excel(content: bytes) -> Tuple[List[VolunteerImportRow], List[str]]:
+    wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+    ws = wb.active
+    if not ws:
+        return [], ["גיליון ריק"]
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return [], ["אין שורות"]
+    headers = list(rows[0])
+    col = _find_volunteer_column_index(headers)
+    if "first_name" not in col or "last_name" not in col or "phone" not in col:
+        return [], ["חסרות עמודות נדרשות: first_name, last_name, phone"]
+
+    out: List[VolunteerImportRow] = []
+    errors: List[str] = []
+    for i, row in enumerate(rows[1:], start=2):
+        if not any(cell is not None for cell in row):
+            continue
+        try:
+            out.append(
+                VolunteerImportRow(
+                    first_name=_cell_to_text(row[col["first_name"]] if col["first_name"] < len(row) else ""),
+                    last_name=_cell_to_text(row[col["last_name"]] if col["last_name"] < len(row) else ""),
+                    phone=_cell_to_text(row[col["phone"]] if col["phone"] < len(row) else ""),
+                    group_tag=_cell_to_text(row[col["group_tag"]] if "group_tag" in col and col["group_tag"] < len(row) else "") or None,
+                    living_area=_cell_to_text(row[col["living_area"]] if "living_area" in col and col["living_area"] < len(row) else "") or None,
+                )
+            )
+        except ValidationError as e:
+            errors.append(f"שורה {i}: {e}")
+    wb.close()
+    return out, errors
+
+
+def parse_volunteers_csv(content: bytes) -> Tuple[List[VolunteerImportRow], List[str]]:
+    try:
+        text = content.decode("utf-8-sig").strip()
+    except UnicodeDecodeError:
+        return [], ["קובץ לא ב-UTF-8"]
+    if not text:
+        return [], ["קובץ ריק"]
+    rows = list(csv.reader(StringIO(text)))
+    if not rows:
+        return [], ["אין שורות"]
+    col = _find_volunteer_column_index(rows[0])
+    if "first_name" not in col or "last_name" not in col or "phone" not in col:
+        return [], ["חסרות עמודות נדרשות: first_name, last_name, phone"]
+
+    out: List[VolunteerImportRow] = []
+    errors: List[str] = []
+    for i, row in enumerate(rows[1:], start=2):
+        if not row or not any(cell and str(cell).strip() for cell in row):
+            continue
+        try:
+            out.append(
+                VolunteerImportRow(
+                    first_name=_cell_to_text(row[col["first_name"]] if col["first_name"] < len(row) else ""),
+                    last_name=_cell_to_text(row[col["last_name"]] if col["last_name"] < len(row) else ""),
+                    phone=_cell_to_text(row[col["phone"]] if col["phone"] < len(row) else ""),
+                    group_tag=_cell_to_text(row[col["group_tag"]] if "group_tag" in col and col["group_tag"] < len(row) else "") or None,
+                    living_area=_cell_to_text(row[col["living_area"]] if "living_area" in col and col["living_area"] < len(row) else "") or None,
+                )
+            )
+        except ValidationError as e:
+            errors.append(f"שורה {i}: {e}")
+    return out, errors
+
+
+def parse_volunteers_file(content: bytes, filename: str) -> Tuple[List[VolunteerImportRow], List[str]]:
+    fn = (filename or "").lower()
+    if fn.endswith(".csv"):
+        return parse_volunteers_csv(content)
+    if fn.endswith(".xlsx") or fn.endswith(".xls"):
+        return parse_volunteers_excel(content)
     return [], ["סוג קובץ לא נתמך. השתמש ב־CSV או Excel (xlsx)."]

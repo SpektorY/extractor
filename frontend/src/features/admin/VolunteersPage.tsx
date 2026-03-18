@@ -23,6 +23,7 @@ interface VolunteerItem {
   group_tag: string | null
   living_area: string | null
   anonymized: boolean
+  status: "pending" | "approved"
   deleted_at: string | null
 }
 
@@ -38,6 +39,10 @@ export function VolunteersPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [confirmModal, setConfirmModal] = useState<{ action: ConfirmAction; volunteer: VolunteerItem } | null>(null)
   const [viewFilter, setViewFilter] = useState<ViewFilter>("active")
+  const [importModalOpen, setImportModalOpen] = useState(false)
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importResult, setImportResult] = useState<{ imported: number; errors: string[] } | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
   const { data: allVolunteers, isLoading } = useQuery({
     queryKey: ["volunteers"],
@@ -96,6 +101,31 @@ export function VolunteersPage() {
     },
   })
 
+  const approveMutation = useMutation({
+    mutationFn: (id: number) => apiRequest(`/api/v1/volunteers/${id}/approve`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["volunteers"] })
+    },
+  })
+
+  async function handleImport() {
+    if (!importFile) return
+    setImportError(null)
+    setImportResult(null)
+    const fd = new FormData()
+    fd.append("file", importFile)
+    try {
+      const res = await apiRequest<{ imported: number; errors: string[] }>(
+        "/api/v1/volunteers/import",
+        { method: "POST", body: fd, headers: {} }
+      )
+      setImportResult(res)
+      queryClient.invalidateQueries({ queryKey: ["volunteers"] })
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "שגיאה בהעלאה")
+    }
+  }
+
   function openEdit(v: VolunteerItem) {
     setEditingId(v.id)
     setFormError(null)
@@ -140,6 +170,9 @@ export function VolunteersPage() {
           <CardTitle>ניהול מתנדבים</CardTitle>
           <div className="flex flex-wrap items-center gap-2 pt-2">
             <Button onClick={() => setAddOpen(true)}>הוסף מתנדב</Button>
+            <Button variant="outline" onClick={() => setImportModalOpen(true)}>
+              ייבוא מתנדבים מקובץ
+            </Button>
             <Button
               variant={viewFilter === "active" ? "outline" : "secondary"}
               size="sm"
@@ -277,6 +310,7 @@ export function VolunteersPage() {
                   <TableHead>טלפון</TableHead>
                   <TableHead>אזור</TableHead>
                   <TableHead>קבוצה</TableHead>
+                  <TableHead>סטטוס הרשאה</TableHead>
                   <TableHead>פעולות</TableHead>
                 </TableRow>
               </TableHeader>
@@ -291,40 +325,49 @@ export function VolunteersPage() {
                     <TableCell>{v.living_area ?? "—"}</TableCell>
                     <TableCell>{v.group_tag ?? "—"}</TableCell>
                     <TableCell>
-                      {v.anonymized && <span className="text-muted-foreground">הוסר (אנונימי)</span>}
-                      {v.deleted_at && <span className="text-muted-foreground">הוסר</span>}
+                      {v.status === "approved" ? "מאושר" : "ממתין לאישור"}
                     </TableCell>
-                    <TableCell>
-                      {!v.anonymized && (
+                    <TableCell className="space-x-2 space-x-reverse">
+                      {!v.anonymized && !v.deleted_at && (
                         <>
-                          {!v.deleted_at && (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="ml-2"
-                                onClick={() => openEdit(v)}
-                              >
-                                ערוך
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => openConfirmDelete(v)}
-                              >
-                                מחק
-                              </Button>
-                            </>
+                          {v.status === "pending" && (
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => approveMutation.mutate(v.id)}
+                              disabled={approveMutation.isPending}
+                            >
+                              אשר
+                            </Button>
                           )}
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => openConfirmAnonymize(v)}
+                            className="ml-2"
+                            onClick={() => openEdit(v)}
                           >
-                            אנונימיזציה
+                            ערוך
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openConfirmDelete(v)}
+                          >
+                            מחק
                           </Button>
                         </>
                       )}
+                      {!v.anonymized && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openConfirmAnonymize(v)}
+                        >
+                          אנונימיזציה
+                        </Button>
+                      )}
+                      {v.anonymized && <span className="text-muted-foreground">הוסר (אנונימי)</span>}
+                      {v.deleted_at && !v.anonymized && <span className="text-muted-foreground">הוסר</span>}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -333,6 +376,61 @@ export function VolunteersPage() {
           )}
         </CardContent>
       </Card>
+
+      {importModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          dir="rtl"
+          onClick={() => setImportModalOpen(false)}
+          onKeyDown={(e) => e.key === "Escape" && setImportModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <Card className="mx-4 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <CardHeader>
+              <CardTitle>ייבוא מתנדבים</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                פורמט נתמך: CSV או Excel עם עמודות first_name, last_name, phone (אופציונלי: group_tag, living_area).
+              </p>
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => {
+                  setImportFile(e.target.files?.[0] ?? null)
+                  setImportError(null)
+                  setImportResult(null)
+                }}
+              />
+              <Button onClick={handleImport} disabled={!importFile}>
+                העלה
+              </Button>
+              {importError && (
+                <p className="text-sm text-destructive">{importError}</p>
+              )}
+              {importResult && (
+                <div className="rounded border bg-muted/30 p-3 text-sm">
+                  <p className="font-medium text-green-600">נוספו {importResult.imported} מתנדבים.</p>
+                  {importResult.errors.length > 0 && (
+                    <>
+                      <p className="mt-1 text-amber-600">שגיאות: {importResult.errors.length}</p>
+                      <ul className="mt-1 list-disc list-inside text-muted-foreground max-h-24 overflow-auto">
+                        {importResult.errors.slice(0, 10).map((err, i) => (
+                          <li key={i}>{err}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              )}
+              <Button variant="outline" className="w-full" onClick={() => setImportModalOpen(false)}>
+                סגור
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {confirmModal && (
         <div
